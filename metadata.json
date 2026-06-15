@@ -1,0 +1,6 @@
+{
+  "name": "Bulk SMS Broadcaster",
+  "description": "Automatically blast messages to groups of contacts using Twilio and Authkey gateways with live history delivery logs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
