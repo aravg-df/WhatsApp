@@ -47,6 +47,8 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
   const [scheduleTime, setScheduleTime] = useState('12:00');
   const [schedulesList, setSchedulesList] = useState<any[]>([]);
 
+  const [templateListTab, setTemplateListTab] = useState<'authkey' | 'twilio'>('authkey');
+
   const [templateType, setTemplateType] = useState<string>('marketing');
   
   // Format configurations and verification variables
@@ -185,7 +187,7 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
           setApprovedTemplates(prev => {
             const merged = [...prev];
             data.templates.forEach((liveTpl: any) => {
-              const matchIdx = merged.findIndex(t => t.name.toLowerCase().trim() === liveTpl.name.toLowerCase().trim());
+              const matchIdx = merged.findIndex(t => t.id === liveTpl.id || (t.name && liveTpl.name && t.name.toLowerCase().trim() === liveTpl.name.toLowerCase().trim()));
               if (matchIdx !== -1) {
                 // Merge/update
                 merged[matchIdx] = { ...merged[matchIdx], ...liveTpl };
@@ -1500,7 +1502,7 @@ e.g.,
           <div className="flex items-center justify-between pb-3 border-b border-neutral-900 flex-wrap gap-2">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4.5 w-4.5 text-emerald-500" />
-              <h4 className="font-serif text-sm font-medium text-white">Meta WhatsApp Template Submissions</h4>
+              <h4 className="font-serif text-sm font-medium text-white">Meta WhatsApp Templates</h4>
             </div>
             <div className="flex items-center gap-3">
               <button
@@ -1508,7 +1510,7 @@ e.g.,
                 disabled={isSyncingTemplates}
                 type="button"
                 className="bg-[#1c1917]/80 hover:bg-[#2e2a24] border border-neutral-800 disabled:opacity-50 text-[10px] text-amber-500 font-bold px-2.5 py-1 rounded-md transition flex items-center gap-1 cursor-pointer"
-                title="Query Twilio and Authkey APIs for live templates"
+                title="Query Twilio API and refresh local records"
               >
                 <RefreshCw className={`h-3 w-3 ${isSyncingTemplates ? 'animate-spin' : ''}`} />
                 {isSyncingTemplates ? 'Syncing...' : 'Fetch Live API'}
@@ -1542,95 +1544,128 @@ e.g.,
             </div>
           )}
 
-          {approvedTemplates.length === 0 ? (
-            <div className="text-center py-6 text-xs text-neutral-500 font-mono italic">
-              No WhatsApp templates submitted yet. Provide a Content ID in the form and click draft to register the Meta details.
-            </div>
-          ) : (
-            <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
-              {approvedTemplates.map((tpl) => (
-                <div key={tpl.id} className="bg-neutral-950 border border-neutral-850 hover:border-neutral-700/60 rounded-lg p-3.5 space-y-2 transition animate-fadeIn">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-[12px] font-semibold text-neutral-200 block truncate max-w-[200px]">ID: {tpl.name}</span>
-                      <span className="text-[9px] text-neutral-500 font-mono mt-0.5 block flex items-center gap-1.5 flex-wrap">
-                        {tpl.gateway ? (
-                          <span className="bg-emerald-950/40 border border-emerald-800/40 text-emerald-400 px-1.5 py-0.2 rounded text-[7.5px] uppercase font-bold tracking-wide flex items-center gap-0.5">
-                            <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"></span>
-                            Live {tpl.gateway} API
-                          </span>
-                        ) : (
-                          <span className="bg-[#1c1917]/80 border border-neutral-800 text-neutral-450 px-1 py-0.2 rounded text-[7.5px] uppercase font-bold">
-                            Local draft
-                          </span>
-                        )}
-                        {(tpl.gateway === 'authkey' || tpl.id === '37382') && (
-                          <a 
-                            href={`https://console.authkey.io/dashboard/preview-whatsapp-template/${/^\d+$/.test(tpl.id) ? tpl.id : '37382'}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/20 px-1.5 py-0.2 rounded text-[7.5px] font-bold tracking-wide flex items-center gap-0.5 transition cursor-pointer normal-case"
-                            title="Preview layout on Live Authkey Console"
-                          >
-                            <ExternalLink className="h-2.5 w-2.5 text-amber-400" /> console preview
-                          </a>
-                        )}
-                        {tpl.format && (
-                          <span className="bg-neutral-900 border border-neutral-800/60 text-amber-500 px-1 py-0.2 rounded text-[7.5px] uppercase font-bold tracking-wide">
-                            {tpl.format} Format
-                          </span>
-                        )}
+          {/* Tabs for Template Providers */}
+          <div className="flex border border-neutral-850 rounded-lg p-0.5 bg-neutral-950/80 mb-3">
+            <button
+              type="button"
+              onClick={() => setTemplateListTab('authkey')}
+              className={`flex-1 text-center py-2 rounded-md text-xs font-semibold cursor-pointer transition ${
+                templateListTab === 'authkey' ? 'bg-neutral-800 text-neutral-100 border border-neutral-700/40 shadow-sm' : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              Authkey Templates
+            </button>
+            <button
+              type="button"
+              onClick={() => setTemplateListTab('twilio')}
+              className={`flex-1 text-center py-2 rounded-md text-xs font-semibold cursor-pointer transition ${
+                templateListTab === 'twilio' ? 'bg-neutral-800 text-neutral-100 border border-neutral-700/40 shadow-sm' : 'text-neutral-500 hover:text-neutral-300'
+              }`}
+            >
+              Twilio Templates
+            </button>
+          </div>
+
+          {(() => {
+            const displayedTemplatesRaw = approvedTemplates.filter(t => 
+               templateListTab === 'authkey' ? t.gateway === 'authkey' || (!t.gateway && t.name.includes('AUTHKEY')) : t.gateway !== 'authkey' && !t.name.includes('AUTHKEY')
+            );
+            const seenIds = new Set();
+            const displayedTemplates = displayedTemplatesRaw.filter(t => {
+               if (seenIds.has(t.id)) return false;
+               seenIds.add(t.id);
+               return true;
+            });
+            return displayedTemplates.length === 0 ? (
+              <div className="text-center py-6 text-xs text-neutral-500 font-mono italic">
+                No WhatsApp templates found for {templateListTab === 'authkey' ? 'Authkey' : 'Twilio'}. Provide a Content ID to register details.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
+                {displayedTemplates.map((tpl, index) => (
+                  <div key={`${tpl.id}-${index}`} className="bg-neutral-950 border border-neutral-850 hover:border-neutral-700/60 rounded-lg p-3.5 space-y-2 transition animate-fadeIn">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="text-[12px] font-semibold text-neutral-200 block truncate max-w-[200px]">ID: {tpl.name}</span>
+                        <span className="text-[9px] text-neutral-500 font-mono mt-0.5 block flex items-center gap-1.5 flex-wrap">
+                          {tpl.gateway ? (
+                            <span className="bg-emerald-950/40 border border-emerald-800/40 text-emerald-400 px-1.5 py-0.2 rounded text-[7.5px] uppercase font-bold tracking-wide flex items-center gap-0.5">
+                              <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse"></span>
+                              Live {tpl.gateway} API
+                            </span>
+                          ) : (
+                            <span className="bg-[#1c1917]/80 border border-neutral-800 text-neutral-450 px-1 py-0.2 rounded text-[7.5px] uppercase font-bold">
+                              Local draft
+                            </span>
+                          )}
+                          {(tpl.gateway === 'authkey' || tpl.id === '37382') && (
+                            <a 
+                              href={`https://console.authkey.io/dashboard/preview-whatsapp-template/${/^\\d+$/.test(tpl.id) ? tpl.id : '37382'}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="bg-amber-500/10 hover:bg-amber-500/20 text-amber-500 border border-amber-500/20 px-1.5 py-0.2 rounded text-[7.5px] font-bold tracking-wide flex items-center gap-0.5 transition cursor-pointer normal-case"
+                              title="Preview layout on Live Authkey Console"
+                            >
+                              <ExternalLink className="h-2.5 w-2.5 text-amber-400" /> console preview
+                            </a>
+                          )}
+                          {tpl.format && (
+                            <span className="bg-neutral-900 border border-neutral-800/60 text-amber-500 px-1 py-0.2 rounded text-[7.5px] uppercase font-bold tracking-wide">
+                              {tpl.format} Format
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                      <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase shrink-0 ${
+                        tpl.status === 'approved'
+                          ? 'bg-emerald-955/20 border-emerald-850 text-emerald-400 font-bold'
+                          : 'bg-amber-955/20 border-amber-850 text-amber-400 animate-pulse'
+                      }`}>
+                        {tpl.status.replace(/_/g, ' ')}
                       </span>
                     </div>
-                    <span className={`text-[9px] font-mono px-2 py-0.5 rounded border uppercase shrink-0 ${
-                      tpl.status === 'approved'
-                        ? 'bg-emerald-955/20 border-emerald-850 text-emerald-400 font-bold'
-                        : 'bg-amber-955/20 border-amber-850 text-amber-400 animate-pulse'
-                    }`}>
-                      {tpl.status.replace(/_/g, ' ')}
-                    </span>
-                  </div>
 
-                  <p className="text-xs text-neutral-400 line-clamp-2 italic font-mono bg-neutral-900/40 p-2 rounded border border-neutral-900/50">
-                    "{tpl.body}"
-                  </p>
+                    <p className="text-xs text-neutral-400 line-clamp-2 italic font-mono bg-neutral-900/40 p-2 rounded border border-neutral-900/50">
+                      "{tpl.body}"
+                    </p>
 
-                  <div className="flex justify-between items-center text-[10px] font-sans text-neutral-500 pt-1.5 border-t border-neutral-900/60">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-neutral-500">Code: {tpl.id}</span>
-                      {tpl.type && (
-                        <span className="bg-neutral-900 border border-neutral-800 text-teal-400 font-bold px-1 py-0.5 rounded text-[8px] uppercase shrink-0">
-                          {tpl.type}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <button
-                        type="button"
-                        onClick={() => handleSelectTemplate(tpl)}
-                        className="text-emerald-400 hover:text-emerald-300 font-bold transition flex items-center gap-0.5 cursor-pointer text-[10px]"
-                        title="Load this template to draft box immediately"
-                      >
-                        ⚡ Apply Template
-                      </button>
-                      
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = approvedTemplates.filter(t => t.id !== tpl.id);
-                          setApprovedTemplates(next);
-                          localStorage.setItem('approved_whatsapp_templates', JSON.stringify(next));
-                        }}
-                        className="text-neutral-550 hover:text-rose-400 transition cursor-pointer"
-                      >
-                        Remove Log
-                      </button>
+                    <div className="flex justify-between items-center text-[10px] font-sans text-neutral-500 pt-1.5 border-t border-neutral-900/60">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-neutral-500">Code: {tpl.id}</span>
+                        {tpl.type && (
+                          <span className="bg-neutral-900 border border-neutral-800 text-teal-400 font-bold px-1 py-0.5 rounded text-[8px] uppercase shrink-0">
+                            {tpl.type}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectTemplate(tpl)}
+                          className="text-emerald-400 hover:text-emerald-300 font-bold transition flex items-center gap-0.5 cursor-pointer text-[10px]"
+                          title="Load this template to draft box immediately"
+                        >
+                          ⚡ Apply Template
+                        </button>
+                        
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const next = approvedTemplates.filter(t => t.id !== tpl.id);
+                            setApprovedTemplates(next);
+                            localStorage.setItem('approved_whatsapp_templates', JSON.stringify(next));
+                          }}
+                          className="text-neutral-550 hover:text-rose-400 transition cursor-pointer"
+                        >
+                          Remove Log
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>

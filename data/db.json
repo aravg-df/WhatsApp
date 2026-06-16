@@ -1,0 +1,25 @@
+{
+  "groups": [
+    {
+      "id": "g-default",
+      "name": "test",
+      "description": "A sample group to help you get started. Edit or delete this.",
+      "contacts": [
+        {
+          "id": "c-z7nuw2j",
+          "name": "arva",
+          "phone": "9238936229",
+          "countryCode": "91"
+        },
+        {
+          "id": "c-ife40j5",
+          "name": "p",
+          "phone": "6265086685",
+          "countryCode": "91"
+        }
+      ]
+    }
+  ],
+  "history": [],
+  "schedules": []
+}

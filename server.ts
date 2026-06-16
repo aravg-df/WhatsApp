@@ -154,46 +154,44 @@ async function startServer() {
       logs.push('Twilio profile is not configured on this server instance.');
     }
 
-    // 2. Authkey Live Templates Retrieval
     if (authkeyConfigured) {
+      logs.push('Fetching live Meta templates from Authkey...');
       try {
-        const apiKey = process.env.AUTHKEY_API_KEY;
-        logs.push('Retrieving templates from Authkey Channel Account...');
+        const apiKey = process.env.AUTHKEY_API_KEY!;
+        const authkeyResponse = await fetch('https://console.authkey.io/restapi/getAllTemplate.php', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ channel: 'whatsapp' })
+        });
         
-        // Typical Authkey Whatsapp template retrieval API endpoint:
-        // https://api.authkey.io/request?authkey=APIKEY&route=whatsapp&action=get_templates
-        const url = `https://api.authkey.io/request?authkey=${apiKey}&route=whatsapp&action=get_templates`;
-        const response = await fetch(url);
-        
-        if (response.ok) {
-          const text = await response.text();
-          let data: any = null;
+        if (authkeyResponse.ok) {
+          const bodyTxt = await authkeyResponse.text();
           try {
-            data = JSON.parse(text);
-          } catch {
-            // response body isn't JSON
-          }
-
-          if (data && (Array.isArray(data) || Array.isArray(data.templates) || Array.isArray(data.data))) {
-            const list = Array.isArray(data) ? data : (data.templates || data.data);
-            list.forEach((item: any) => {
-              templates.push({
-                id: item.id || item.template_id || 'AK-' + Math.random().toString(36).substring(2, 6).toUpperCase(),
-                name: item.name || item.template_name || 'AUTHKEY_TEMPLATE',
-                body: item.body || item.message_content || item.message || '',
-                status: item.status === 'approved' || item.is_approved ? 'approved' : 'pending',
-                type: item.type || 'marketing',
-                format: item.media_url ? 'media' : 'text',
-                mediaUrl: item.media_url || undefined,
-                gateway: 'authkey'
+            const data = JSON.parse(bodyTxt);
+            if (data.status && Array.isArray(data.data)) {
+              data.data.forEach((temp: any) => {
+                templates.push({
+                  id: String(temp.wid),
+                  name: temp.temp_name || String(temp.wid),
+                  body: temp.temp_body || '',
+                  status: temp.temp_status === 1 ? 'approved' : 'pending',
+                  type: temp.temp_category || 'marketing',
+                  format: 'text',
+                  gateway: 'authkey'
+                });
               });
-            });
-            logs.push(`Successfully loaded ${list.length} live Authkey WhatsApp templates!`);
-          } else {
-            logs.push(`Authkey API succeeded but returned non-mappable schema: ${text.substring(0, 100)}`);
+              logs.push(`Successfully loaded ${data.data.length} live Authkey WhatsApp templates!`);
+            } else {
+              logs.push('Authkey API returned valid JSON without expected template layout.');
+            }
+          } catch (e) {
+            logs.push(`Failed to parse Authkey template response: ${bodyTxt.substring(0, 100)}`);
           }
         } else {
-          logs.push(`Authkey templates request failed with status: ${response.status}`);
+          logs.push(`Authkey API responded with status ${authkeyResponse.status}`);
         }
       } catch (err: any) {
         logs.push(`Authkey fetch exception: ${err.message}`);
@@ -434,155 +432,52 @@ async function startServer() {
     }
   }
 
-  // Server-side mapping matching preset template catalog to allow parameters extraction & media routing
-  const SERVER_TEMPLATES: Record<string, { body: string; format?: string; mediaUrl?: string; header?: string }> = {
-    '37142': {
-      format: 'media',
-      mediaUrl: 'https://wpgallery.s3.ap-south-1.amazonaws.com/gallery/202606/6a2a93be8cb23.png',
-      body: 'आदरणीय भाई साहब, नमस्कार।\n\nविंध्य चैंबर ऑफ कॉमर्स एंड इंडस्ट्रीज के आगामी चुनाव में अध्यक्ष पद हेतु आपका स्नेह, आशीर्वाद एवं समर्थन चाहता हूँ।\n\nवर्षों से आपने सभी को परखा है, अब एक अवसर बदलाव, नई सोच और सक्रिय नेतृत्व को दीजिए।\n\n"परख चुके हैं सबको बार-बार,\nअब एक मौका बदलाव को इस बार।"\n\nआपका समर्थन एवं आशीर्वाद अपेक्षित है।\n\nसादर 🙏\nअशोक अग्रवाल (अशोका पैलेस)\nअध्यक्ष पद प्रत्याशी\nविंध्य चैंबर ऑफ कॉमर्स एंड इंडस्ट्रीज, सतना।'
-    },
-    '37020': {
-      format: 'text',
-      body: 'आदरणीय भाई साहब, नमस्कार।\n\nविंध्य चैंबर ऑफ कॉमर्स एंड इंडस्ट्रीज के आगामी चुनाव में अध्यक्ष पद हेतु आपका स्नेह, आशीर्वाद एवं समर्थन चाहता हूँ।\n\nवर्षों से आपने सभी को परखा है, अब एक अवसर बदलाव, नई सोच और सक्रिय नेतृत्व को दीजिए।\n\n"परख चुके हैं सबको बार-बार,\n\nअब एक मौका बदलाव को इस बार।"\n\nआपका समर्थन एवं आशीर्वाद अपेक्षित है।\n\nसादर 🙏\n\nअशोक अग्रवाल (अशोका पैलेस)\n\nअध्यक्ष पद प्रत्याशी\n\nविंध्य चैंबर ऑफ कॉमर्स एंड इंडस्ट्रीज, सतना।'
-    },
-    '36753': {
-      format: 'text',
-      header: 'नमस्कार, अशोक अग्रवाल',
-      body: 'आदरणीय भाई साहब,\nविंध्य चैंबर ऑफ कॉमर्स एंड इंडस्ट्रीज के आगामी चुनाव में अध्यक्ष पद हेतु आपका स्नेह, आशीर्वाद एवं समर्थन चाहता हूँ।\nमेरा विश्वास है कि चैंबर की सबसे बड़ी ताकत उसके सदस्य हैं। व्यापारियों का सम्मान, उनकी आवाज़ और उनके हितों के प्रति निरंतर प्रतिबद्धता ही किसी भी सशक्त संगठन की पहचान होती है। इसी भावना और संकल्प के साथ मैं आप सभी के बीच उपस्थित हूँ।\nआशा है कि आपके विश्वास, मार्गदर्शन एवं सहयोग का स्नेह सदैव प्राप्त होगा।\n\nसादर 🙏\nअशोक अग्रवाल\nअध्यक्ष पद प्रत्याशी\nविंध्य चैंबर ऑफ कॉमर्स एंड इंडस्ट्रीज, सतना'
-    },
-    '37382': {
-      format: 'text',
-      body: 'Dear {{1}}, we have updated your live templates with direct portal validation links: {{2}}. View instantly.'
-    }
-  };
-
-  // Helper to extract sequential replacement parameters from template patterns in real-time
-  function extractTemplateParams(templateBody: string, finalMessage: string): string[] {
-    if (!templateBody || !finalMessage) return [];
-    
-    const normTpl = templateBody.replace(/\r\n/g, '\n').trim();
-    const normMsg = finalMessage.replace(/\r\n/g, '\n').trim();
-
-    if (!normTpl.includes('{{1}}')) return [];
-
-    try {
-      // Escape regex special chars in template body
-      let tplRegexStr = normTpl.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
-      tplRegexStr = tplRegexStr.replace(/\\\{\\\{(\d+)\\\}\\\}/g, '([\\s\\S]*?)');
-      
-      const pattern = new RegExp('^' + tplRegexStr + '$');
-      const match = normMsg.match(pattern);
-      if (match) {
-        return match.slice(1).map(x => x.trim());
-      }
-    } catch (err) {
-      console.error('Regex extraction failed:', err);
-    }
-    
-    // Fallback: Split method
-    try {
-      const parts = normTpl.split(/\{\{\d+\}\}/);
-      let tempMsg = normMsg;
-      const extracted: string[] = [];
-      for (let i = 0; i < parts.length - 1; i++) {
-        const part = parts[i];
-        const nextPart = parts[i + 1];
-        
-        const startIndex = tempMsg.indexOf(part);
-        if (startIndex !== -1) {
-          tempMsg = tempMsg.substring(startIndex + part.length);
-        }
-        
-        const endIndex = nextPart ? tempMsg.indexOf(nextPart) : tempMsg.length;
-        if (endIndex !== -1) {
-          const val = tempMsg.substring(0, endIndex);
-          extracted.push(val.trim());
-          tempMsg = tempMsg.substring(endIndex);
-        }
-      }
-      if (extracted.length > 0) return extracted;
-    } catch (e) {}
-
-    return [];
-  }
-
-  async function sendAuthkeyWhatsApp(phone: string, countryCode: string, templateId: string, message: string, senderOverride?: string): Promise<{ success: boolean; error?: string }> {
+  async function sendAuthkeyWhatsAppBulk(recipients: Contact[], templateId: string, message: string, senderOverride?: string): Promise<{ success: boolean; error?: string }> {
     const apiKey = process.env.AUTHKEY_API_KEY;
-    const senderId = senderOverride || process.env.AUTHKEY_WHATSAPP_SENDER_ID || process.env.AUTHKEY_SENDER_ID;
+    const senderId = senderOverride || process.env.AUTHKEY_SENDER_ID || '';
 
-    // Graceful automatic Sandbox fallback if keys are missing/placeholder
-    if (!apiKey || !senderId || apiKey.includes('YOUR_') || apiKey.includes('DUMMY') || !apiKey.trim() || senderId.includes('YOUR_')) {
-      console.log(`[SIMULATOR] Authkey credentials not configured. Simulating successful WhatsApp automated sending to ${phone} with template ID ${templateId}`);
+    if (!apiKey || !apiKey.trim() || apiKey.includes('YOUR_') || apiKey.includes('DUMMY')) {
+      console.log(`[SIMULATOR] Authkey credentials not configured. Simulating successful WhatsApp automated bulk sending to ${recipients.length} contacts with template ID ${templateId}`);
       return { success: true };
     }
 
     try {
-      const cleanCountry = countryCode.replace('+', '').trim();
-      const cleanPhone = phone.replace(/\D/g, '').trim();
-
-      const url = new URL('https://api.authkey.io/request');
-      url.searchParams.append('authkey', apiKey.trim());
-      url.searchParams.append('mobile', cleanPhone);
-      url.searchParams.append('country_code', cleanCountry);
-      url.searchParams.append('sender', senderId.trim());
+      const url = 'https://console.authkey.io/restapi/requestjson_v2.0.php';
       
-      // WhatsApp Route Parameters for Authkey
-      url.searchParams.append('route', 'whatsapp');
+      const payloadData = recipients.map(contact => {
+        const cleanPhone = contact.phone.replace(/\D/g, '').trim();
+        return {
+          mobile: cleanPhone
+        };
+      });
 
-      // Populate body parameters redundantly to support multiple gateway routing versions (fixes "Nothing to do")
-      url.searchParams.append('message', message);
-      url.searchParams.append('sms', message);
-      url.searchParams.append('msg', message);
-      url.searchParams.append('text', message);
-      
-      const tid = (templateId || '').trim();
-      if (tid) {
-        url.searchParams.append('template_id', tid);
-        url.searchParams.append('message_id', tid);
+      const body = {
+        version: "2.0",
+        country_code: recipients.length > 0 ? recipients[0].countryCode.replace('+', '').trim() : "91",
+        wid: templateId.trim(),
+        type: "text",
+        data: payloadData
+      };
 
-        // Perform template-level variable parameters extraction
-        const tplConfig = SERVER_TEMPLATES[tid];
-        if (tplConfig) {
-          // Dynamic variable support
-          if (tplConfig.body) {
-            const extraVars = extractTemplateParams(tplConfig.body, message);
-            extraVars.forEach((val, index) => {
-              url.searchParams.append(`parameter${index + 1}`, val);
-              url.searchParams.append(`param${index + 1}`, val);
-              url.searchParams.append(`var${index + 1}`, val);
-            });
-          }
-
-          // Handle media templates
-          if (tplConfig.mediaUrl) {
-            url.searchParams.append('media_url', tplConfig.mediaUrl);
-            url.searchParams.append('mediaurl', tplConfig.mediaUrl);
-            url.searchParams.append('media_type', 'image');
-          }
-
-          // Handle header tags
-          if (tplConfig.header) {
-            url.searchParams.append('header', tplConfig.header);
-            url.searchParams.append('header_text', tplConfig.header);
-          }
-        }
-      }
-
-      const response = await fetch(url.toString(), {
-        method: 'GET',
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Basic ${apiKey.trim()}`
+        },
+        body: JSON.stringify(body)
       });
 
       const text = await response.text();
       try {
         const data = JSON.parse(text);
-        if (data.status === 'success' || data.success === true || data.Message === 'success' || data.message === 'success') {
+        if (data.status === 'success' || data.success === true || data.Message === 'success' || data.message === 'success' || data.status === 'Success') {
           return { success: true };
         } else {
-          // Check for possible successful submission strings inside JSON fields
           if (text.toLowerCase().includes('success') || text.toLowerCase().includes('submitted') || text.toLowerCase().includes('sent')) {
             return { success: true };
           }
-          return { success: false, error: data.message || data.Message || `Authkey WhatsApp API failure: ${text}` };
+          return { success: false, error: data.message || data.Message || `Authkey WhatsApp Bulk API failure: ${text}` };
         }
       } catch {
         if (text.toLowerCase().includes('success') || text.toLowerCase().includes('submitted') || text.toLowerCase().includes('sent')) {
@@ -591,7 +486,7 @@ async function startServer() {
         return { success: false, error: `Response: ${text.substring(0, 100)}` };
       }
     } catch (err: any) {
-      return { success: false, error: err.message || 'Unknown network error calling Authkey WhatsApp' };
+      return { success: false, error: err.message || 'Unknown network error calling Authkey WhatsApp Bulk API' };
     }
   }
 
@@ -614,6 +509,40 @@ async function startServer() {
     historyItem.status = 'in_progress';
     saveHistory(historyItem);
 
+    if (gateway === 'authkey' && channel === 'whatsapp' && recipientsToProcess.length > 0) {
+      const res = await sendAuthkeyWhatsAppBulk(recipientsToProcess, templateId, message, authkeyWhatsAppSender);
+      
+      let succ = historyItem.successCount;
+      let fail = historyItem.failedCount;
+
+      for (const contact of recipientsToProcess) {
+        const fullPhoneWithCode = `${contact.countryCode.startsWith('+') ? '' : '+'}${contact.countryCode}${contact.phone.replace(/\D/g, '')}`;
+        const recipientRecord: BroadcastRecipient = {
+          phone: fullPhoneWithCode,
+          name: contact.name || 'Unknown Contact',
+          status: res.success ? 'success' : 'failed',
+          channelUsed: 'authkey',
+          error: res.error || (res.success ? undefined : 'Authkey WhatsApp bulk submission failed')
+        };
+        
+        const recIndex = historyItem.recipients.findIndex(r => r.phone === fullPhoneWithCode);
+        if (recIndex >= 0) {
+          historyItem.recipients[recIndex] = recipientRecord;
+        } else {
+          historyItem.recipients.push(recipientRecord);
+        }
+
+        if (res.success) succ++;
+        else fail++;
+      }
+
+      historyItem.successCount = succ;
+      historyItem.failedCount = fail;
+      historyItem.status = 'completed';
+      saveHistory(historyItem);
+      return;
+    }
+
     let successCount = historyItem.successCount;
     let failedCount = historyItem.failedCount;
 
@@ -635,7 +564,7 @@ async function startServer() {
         if (channel === 'whatsapp') {
           if (gateway === 'both') {
             let twilioResult = await sendTwilioWhatsApp(fullPhoneWithCode, message, templateId, twilioWhatsAppFrom);
-            let authkeyResult = await sendAuthkeyWhatsApp(contact.phone, contact.countryCode, templateId, message, authkeyWhatsAppSender);
+            let authkeyResult = await sendAuthkeyWhatsAppBulk([contact], templateId, message, authkeyWhatsAppSender);
 
             if (twilioResult.success && authkeyResult.success) {
               recipientRecord.status = 'success';
@@ -663,7 +592,7 @@ async function startServer() {
             }
           } else {
             recipientRecord.channelUsed = 'authkey';
-            const res = await sendAuthkeyWhatsApp(contact.phone, contact.countryCode, templateId, message, authkeyWhatsAppSender);
+            const res = await sendAuthkeyWhatsAppBulk([contact], templateId, message, authkeyWhatsAppSender);
             if (res.success) {
               recipientRecord.status = 'success';
             } else {
