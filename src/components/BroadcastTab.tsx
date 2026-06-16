@@ -38,13 +38,12 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
 
   // Scheduling states
   const [isScheduled, setIsScheduled] = useState(false);
-  const [scheduleDate, setScheduleDate] = useState(() => {
+  const [scheduleDateTime, setScheduleDateTime] = useState(() => {
     const d = new Date();
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istDate = new Date(d.getTime() + istOffset);
-    return istDate.toISOString().split('T')[0];
+    return istDate.toISOString().substring(0, 16);
   });
-  const [scheduleTime, setScheduleTime] = useState('12:00');
   const [schedulesList, setSchedulesList] = useState<any[]>([]);
 
   const [templateListTab, setTemplateListTab] = useState<'authkey' | 'twilio'>('authkey');
@@ -622,7 +621,7 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
     }
 
     if (isScheduled) {
-      payload.scheduleTimeIST = `${scheduleDate} ${scheduleTime}`;
+      payload.scheduleTimeIST = scheduleDateTime.replace('T', ' ');
     }
 
     try {
@@ -639,7 +638,7 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
       }
 
       if (isScheduled) {
-        setSuccessMessage(`Success! Campaign blast scheduled for group at ${scheduleDate} ${scheduleTime} IST.`);
+        setSuccessMessage(`Success! Campaign blast scheduled for group at ${scheduleDateTime.replace('T', ' ')} IST.`);
         setMessageText('');
         setTemplateId('');
         setIsScheduled(false);
@@ -1366,28 +1365,16 @@ e.g.,
                   </label>
 
                   {isScheduled && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4.5 pt-1.5 animate-fadeIn">
-                      <div className="space-y-1.5">
+                    <div className="pt-1.5 animate-fadeIn">
+                      <div className="space-y-1.5 w-full">
                         <label className="block text-[11px] font-semibold text-neutral-400 flex items-center gap-1.5">
-                          <Calendar className="h-3.5 w-3.5 text-amber-500" /> Choose Date (IST)
+                          <Calendar className="h-3.5 w-3.5 text-amber-500" /> Choose Date & Time (IST)
                         </label>
                         <input
-                          type="date"
+                          type="datetime-local"
                           required
-                          value={scheduleDate}
-                          onChange={e => setScheduleDate(e.target.value)}
-                          className="w-full text-xs font-mono border border-neutral-800 bg-neutral-900 text-neutral-200 rounded-lg p-2.5 outline-none focus:ring-1 focus:ring-amber-500/50"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <label className="block text-[11px] font-semibold text-neutral-400 flex items-center gap-1.5">
-                          <Clock className="h-3.5 w-3.5 text-amber-500" /> Choose Hour (IST)
-                        </label>
-                        <input
-                          type="time"
-                          required
-                          value={scheduleTime}
-                          onChange={e => setScheduleTime(e.target.value)}
+                          value={scheduleDateTime}
+                          onChange={e => setScheduleDateTime(e.target.value)}
                           className="w-full text-xs font-mono border border-neutral-800 bg-neutral-900 text-neutral-200 rounded-lg p-2.5 outline-none focus:ring-1 focus:ring-amber-500/50"
                         />
                       </div>

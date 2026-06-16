@@ -18,8 +18,7 @@ const DEFAULT_DB: DatabaseSchema = {
       name: 'Sample Group',
       description: 'A sample group to help you get started. Edit or delete this.',
       contacts: [
-        { id: 'c-1', name: 'John Doe', phone: '1234567890', countryCode: '1' },
-         { id: 'c-2', name: 'India Test User', phone: '9876543210', countryCode: '91' }
+        { id: 'c-1', name: 'India Test User-Arav', phone: '9238936229', countryCode: '91' }
       ]
     }
   ],
