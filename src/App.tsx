@@ -3,7 +3,7 @@ import {
   Send, Users, History, Key, CheckSquare, ShieldCheck, 
   Settings, Loader, Sparkles, MessageCircleCode, Info, MessageSquare
 } from 'lucide-react';
-import { ContactGroup, BroadcastHistory, SystemConfigStatus } from './types.js';
+import { ContactGroup, BroadcastHistory, SystemConfigStatus, Client } from './types.js';
 import BroadcastTab from './components/BroadcastTab.js';
 import GroupsTab from './components/GroupsTab.js';
 import HistoryTab from './components/HistoryTab.js';
@@ -16,6 +16,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'broadcast' | 'groups' | 'master' | 'history' | 'status'>('broadcast');
 
   // Application-wide databases
+  const [clients, setClients] = useState<Client[]>([]);
   const [groups, setGroups] = useState<ContactGroup[]>([]);
   const [historyList, setHistoryList] = useState<BroadcastHistory[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemConfigStatus | null>(null);
@@ -25,6 +26,18 @@ export default function App() {
   const [apiError, setApiError] = useState<string | null>(null);
 
   // Synchronizers
+  const fetchClients = async () => {
+    try {
+      const res = await fetch('/api/clients');
+      if (res.ok) {
+        const data = await res.json();
+        setClients(data);
+      }
+    } catch (err) {
+      console.error('Error fetching clients:', err);
+    }
+  };
+
   const fetchGroups = async () => {
     try {
       const res = await fetch('/api/groups');
@@ -65,7 +78,7 @@ export default function App() {
     setLoading(true);
     setApiError(null);
     try {
-      await Promise.all([fetchGroups(), fetchHistory(), fetchStatus()]);
+      await Promise.all([fetchClients(), fetchGroups(), fetchHistory(), fetchStatus()]);
     } catch (err: any) {
       setApiError('Unable to connect to the backend server API. Confirm that the server is active.');
     } finally {
@@ -95,9 +108,12 @@ export default function App() {
         throw new Error(data.error || 'Failed saving group');
       }
 
+      const savedGroup = await res.json();
       await fetchGroups(); // sync groups directory
+      return savedGroup;
     } catch (err: any) {
       alert(`Error saving segment: ${err.message}`);
+      throw err;
     }
   };
 
@@ -284,6 +300,7 @@ export default function App() {
             <div className="min-h-[400px]">
               {activeTab === 'broadcast' && (
                 <BroadcastTab
+                  clients={clients}
                   groups={groups}
                   systemStatus={systemStatus}
                   onBroadcastTriggered={handleBroadcastLifecycle}
@@ -292,14 +309,17 @@ export default function App() {
 
               {activeTab === 'groups' && (
                 <GroupsTab
+                  clients={clients}
                   groups={groups}
                   onSaveGroup={handleSaveGroup}
                   onDeleteGroup={handleDeleteGroup}
+                  onClientsChanged={fetchClients}
                 />
               )}
 
               {activeTab === 'master' && (
                 <MasterDataTab
+                  clients={clients}
                   groups={groups}
                   fetchGroups={fetchGroups}
                 />

@@ -5,15 +5,17 @@ import {
   Clock, Calendar, Trash2, ShieldCheck, Sparkles, CheckSquare, Info,
   Image, FileText, MousePointer, ExternalLink, Phone
 } from 'lucide-react';
-import { Contact, ContactGroup, BroadcastHistory, SystemConfigStatus } from '../types.js';
+import { Contact, ContactGroup, BroadcastHistory, SystemConfigStatus, Client } from '../types.js';
 
 interface BroadcastTabProps {
+  clients: Client[];
   groups: ContactGroup[];
   systemStatus: SystemConfigStatus | null;
   onBroadcastTriggered: (historyId: string) => void;
 }
 
-export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggered }: BroadcastTabProps) {
+export default function BroadcastTab({ clients, groups, systemStatus, onBroadcastTriggered }: BroadcastTabProps) {
+  const [activeClientId, setActiveClientId] = useState<string>(clients[0]?.id || 'client-1');
   const [selectedGroupId, setSelectedGroupId] = useState<string>('');
   const [useAdhoc, setUseAdhoc] = useState(false);
   const [adhocText, setAdhocText] = useState('');
@@ -383,11 +385,15 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
     setCtaUrl(tpl.ctaUrl || 'https://ai.studio/build');
     setCtaPhone(tpl.ctaPhone || '+15550199292');
 
+    // Automatically enforce correct gateway based on template to prevent failure loop
+    const isAuthkey = tpl.gateway === 'authkey' || (!tpl.gateway && (tpl.name && tpl.name.includes('AUTHKEY')));
+    setGatewaySelected(isAuthkey ? 'authkey' : 'twilio');
+
     // Auto-set positive checked status!
     setCheckResult('approved');
     setCheckedTemplateObj(tpl);
 
-    setSuccessMessage(`Selected approved template '${tpl.name}'! Pre-filled dynamic fields and locked editing canvas.`);
+    setSuccessMessage(`Selected template '${tpl.name}'! Gateway locked to ${isAuthkey ? 'Authkey' : 'Twilio'} to prevent rate-limit failures.`);
   };
 
   // Check template ID status action
@@ -424,7 +430,11 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
           setCtaUrl(match.ctaUrl || 'https://ai.studio/build');
           setCtaPhone(match.ctaPhone || '+15550199292');
           
-          setSuccessMessage(`Registry status check: Template ID '${match.name}' is APPROVED. Pre-filled content and locked inputs successfully!`);
+          // Automatically enforce correct gateway based on template to prevent failure loop
+          const isAuthkey = match.gateway === 'authkey' || (!match.gateway && (match.name && match.name.includes('AUTHKEY')));
+          setGatewaySelected(isAuthkey ? 'authkey' : 'twilio');
+          
+          setSuccessMessage(`Registry status check: Template ID '${match.name}' is APPROVED. Settings and gateway locked!`);
         } else {
           setErrorMessage(`Registry check: Template ID '${match.name}' has been found but is currently PENDING review by Meta.`);
         }
@@ -773,25 +783,43 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
             </div>
 
             {!useAdhoc ? (
-              <div className="space-y-1">
-                <label className="block text-xs font-semibold text-neutral-450">Select Contact Group</label>
-                <div className="relative">
-                  <Users className="absolute left-3 top-3 h-4 w-4 text-neutral-500" />
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-neutral-450">Select Client Workspace</label>
                   <select
-                    value={selectedGroupId}
-                    onChange={e => setSelectedGroupId(e.target.value)}
-                    className="w-full text-sm border border-neutral-850 rounded-lg pl-9.5 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-amber-500/50 bg-neutral-950 text-neutral-200 cursor-pointer hover:border-neutral-800 transition"
+                    value={activeClientId}
+                    onChange={e => {
+                      setActiveClientId(e.target.value);
+                      setSelectedGroupId('');
+                    }}
+                    className="w-full text-sm border border-neutral-850 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-amber-500/50 bg-neutral-950 text-amber-500 font-medium cursor-pointer hover:border-neutral-800 transition"
                   >
-                    {groups.length === 0 ? (
-                      <option value="" className="bg-[#050505] text-neutral-400">-- No Groups Created --</option>
-                    ) : (
-                      groups.map(g => (
-                        <option key={g.id} value={g.id} className="bg-[#050505] text-neutral-200">
-                          {g.name} ({g.contacts.length} numbers)
-                        </option>
-                      ))
-                    )}
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
                   </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="block text-xs font-semibold text-neutral-450">Select Contact Group</label>
+                  <div className="relative">
+                    <Users className="absolute left-3 top-3 h-4 w-4 text-neutral-500" />
+                    <select
+                      value={selectedGroupId}
+                      onChange={e => setSelectedGroupId(e.target.value)}
+                      className="w-full text-sm border border-neutral-850 rounded-lg pl-9.5 pr-3 py-2.5 outline-none focus:ring-1 focus:ring-amber-500/50 bg-neutral-950 text-neutral-200 cursor-pointer hover:border-neutral-800 transition"
+                    >
+                      <option value="">-- Choose Group --</option>
+                      {groups.filter(g => g.clientId === activeClientId).length === 0 ? (
+                        <option value="" disabled className="bg-[#050505] text-neutral-400">No groups in this client</option>
+                      ) : (
+                        groups.filter(g => g.clientId === activeClientId).map(g => (
+                          <option key={g.id} value={g.id} className="bg-[#050505] text-neutral-200">
+                            {g.name} ({g.contacts.length} numbers)
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -856,9 +884,9 @@ e.g.,
                       type="button"
                       onClick={handleCheckTemplateApproval}
                       disabled={checkStatusActive}
-                      className="bg-amber-550 hover:bg-amber-400 disabled:bg-neutral-900 border border-amber-600/25 disabled:border-neutral-850 text-neutral-950 disabled:text-neutral-500 font-bold px-3 py-2 rounded-lg text-xs transition cursor-pointer flex items-center justify-center gap-1 shrink-0"
+                      className="bg-neutral-800 hover:bg-neutral-700 disabled:bg-neutral-900 border border-neutral-700 disabled:border-neutral-850 text-amber-400 disabled:text-neutral-600 font-bold px-3 py-2.5 rounded-lg text-xs transition cursor-pointer flex items-center justify-center gap-1 shrink-0"
                     >
-                      {checkStatusActive ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-neutral-600" /> : '🔍 Check Approval'}
+                      {checkStatusActive ? <RefreshCw className="h-3.5 w-3.5 animate-spin text-neutral-600" /> : 'Check Approval'}
                     </button>
                   </div>
                   <span className="text-[10px] text-[#8e8e8e] block">Registered WhatsApp template message ID standard. Click Check to verify status with Meta.</span>
@@ -1010,23 +1038,6 @@ e.g.,
                     <span className="block text-[10px] text-neutral-400 mt-0.5">High velocity regional transactional SMS API Gateway</span>
                   </div>
                 </label>
-
-                <label className={`flex items-center gap-3.5 p-3.5 rounded-lg border cursor-pointer transition ${
-                  gatewaySelected === 'both' ? 'border-amber-500/50 bg-amber-500/[0.03]' : 'border-neutral-855 bg-neutral-950 hover:bg-neutral-900/40'
-                }`}>
-                  <input
-                    type="radio"
-                    name="gateway"
-                    value="both"
-                    checked={gatewaySelected === 'both'}
-                    onChange={() => setGatewaySelected('both')}
-                    className="accent-amber-500 h-4 w-4"
-                  />
-                  <div>
-                    <span className="block text-xs font-semibold text-neutral-100">Blast Double (Both Services)</span>
-                    <span className="block text-[10px] text-neutral-400 mt-0.5">Simultaneously push delivery on both systems</span>
-                  </div>
-                </label>
               </div>
             </div>
           </div>
@@ -1131,22 +1142,98 @@ e.g.,
                     </div>
 
                     <div className="bg-neutral-950 border border-neutral-900 p-3 rounded-lg text-[10.5px] text-neutral-400 flex items-start gap-2">
-                      <Info className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
-                      <div>
-                        Personal parameters (e.g. name placeholder {"{{1}}"}) will be dynamically mapped to matching recipient parameters during dispatching automatically.
-                      </div>
-                    </div>
+                       <Info className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+                       <div>
+                         Personal parameters (e.g. name placeholder {"{{1}}"}) will be dynamically mapped to matching recipient parameters during dispatching automatically.
+                       </div>
+                     </div>
 
-                    <div className="border-t border-neutral-900 pt-3 flex items-center justify-between">
-                      <button
-                        type="submit"
-                        disabled={isSending || recipientCount === 0}
-                        className="flex-1 bg-amber-550 hover:bg-amber-400 disabled:bg-neutral-900 border border-amber-600/20 disabled:border-neutral-850 text-neutral-950 disabled:text-neutral-600 font-bold rounded-xl px-5 py-3.5 transition flex items-center justify-center gap-2 text-xs uppercase tracking-wider cursor-pointer shadow-md shadow-amber-500/5 active:scale-[0.98]"
-                      >
-                        {isSending ? 'Transmitting Burst...' : `🚀 Launch Approved Template Blast (${recipientCount} Recip.)`}
-                      </button>
-                    </div>
-                  </div>
+                     {/* IST Calendar & clock scheduler block */}
+                     <div className={`border rounded-xl p-5 space-y-4 transition-all duration-300 ${
+                       isScheduled ? 'bg-indigo-950/20 border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.05)]' : 'bg-[#070707] border-neutral-850 hover:border-neutral-800'
+                     }`}>
+                       <label className="flex items-start gap-3 cursor-pointer group">
+                         <div className={`mt-0.5 relative flex items-center justify-center w-5 h-5 rounded border transition-colors ${
+                           isScheduled ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-neutral-700 bg-neutral-900 group-hover:border-indigo-500/50'
+                         }`}>
+                           <input
+                             type="checkbox"
+                             checked={isScheduled}
+                             onChange={e => setIsScheduled(e.target.checked)}
+                             className="absolute opacity-0 w-full h-full cursor-pointer"
+                           />
+                           {isScheduled && <Check className="w-3.5 h-3.5" strokeWidth={3} />}
+                         </div>
+                         <div>
+                           <span className={`block text-xs font-bold transition-colors ${
+                             isScheduled ? 'text-indigo-400' : 'text-neutral-250 group-hover:text-neutral-100'
+                           }`}>Schedule Blast for Future Time (IST)</span>
+                           <span className="block text-[10.5px] text-neutral-500 mt-1 leading-relaxed">Automate this message or approved template to be dispatched intelligently at your preferred time.</span>
+                         </div>
+                       </label>
+
+                       {isScheduled && (
+                         <div className="pt-2 animate-fadeIn border-t border-indigo-500/20 mt-3">
+                           <div className="space-y-2 w-full pt-2">
+                             <label className="block text-[11px] font-bold text-indigo-400 flex items-center gap-1.5 uppercase tracking-wide">
+                               <Calendar className="h-4 w-4" /> Choose Date & Time (IST)
+                             </label>
+                             <input
+                               type="datetime-local"
+                               required
+                               value={scheduleDateTime}
+                               onChange={e => setScheduleDateTime(e.target.value)}
+                               className="w-full text-sm font-mono border-2 border-indigo-500/30 bg-indigo-950/30 text-indigo-100 rounded-lg p-3 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all placeholder-indigo-500/30"
+                             />
+                           </div>
+                         </div>
+                       )}
+                     </div>
+
+                     <div className="border-t border-neutral-900 pt-5 flex items-center justify-between gap-4 bg-neutral-950/50 -mx-4 -mb-4 p-4 rounded-b-2xl">
+                       <div className="text-xs text-neutral-400 font-mono">
+                         Target: <span className="font-bold text-amber-500 font-sans">{recipientCount} contacts</span>
+                       </div>
+                       <button
+                         type="submit"
+                         disabled={isSending || recipientCount === 0 || (!messageText.trim() && !templateId)}
+                         className={`disabled:bg-neutral-900 border disabled:border-neutral-850 disabled:text-neutral-600 font-bold rounded-xl transition-all duration-500 flex items-center justify-center gap-3 text-sm disabled:scale-100 active:scale-[0.98] cursor-pointer shadow-xl ${
+                           templateId 
+                             ? 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:via-purple-400 hover:to-pink-400 text-white border-transparent px-10 py-5 shadow-purple-500/25 hover:shadow-purple-500/40 relative overflow-hidden group'
+                             : isScheduled 
+                               ? 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500/50 text-white shadow-indigo-500/20 hover:shadow-indigo-500/30 px-10 py-4' 
+                               : 'bg-amber-500 hover:bg-amber-400 border-amber-600/30 text-neutral-950 shadow-amber-500/15 hover:shadow-amber-500/25 px-10 py-4'
+                         }`}
+                       >
+                         {templateId && !isSending && (
+                           <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out"></div>
+                         )}
+                         <span className="relative z-10 flex items-center gap-3">
+                           {isSending ? (
+                             <>
+                               <RefreshCw className="h-5 w-5 animate-spin" />
+                               Processing...
+                             </>
+                           ) : templateId ? (
+                             <>
+                               {isScheduled ? <Clock className="h-5 w-5" /> : <Send className="h-5 w-5" />}
+                               {isScheduled ? "Schedule Broadcast" : "Launch Broadcast"}
+                             </>
+                           ) : isScheduled ? (
+                             <>
+                               <Clock className="h-5 w-5" />
+                               Schedule Blast
+                             </>
+                           ) : (
+                             <>
+                               <Send className="h-5 w-5" />
+                               Send Broadcast
+                             </>
+                           )}
+                         </span>
+                       </button>
+                     </div>
+                   </div>
                 ) : (
                   /* DRAFTING / UNAPPROVED TEMPLATE LAYOUT: Typing Meta Setup */
                   <div className="space-y-4 animate-fadeIn">
@@ -1351,32 +1438,41 @@ e.g.,
                 </div>
 
                 {/* IST Calendar & clock scheduler block */}
-                <div className="bg-[#070707] border border-neutral-850 rounded-xl p-4 space-y-3.5">
-                  <label className="flex items-start gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={isScheduled}
-                      onChange={e => setIsScheduled(e.target.checked)}
-                      className="rounded border-neutral-800 bg-neutral-900 text-amber-500 focus:ring-0 focus:ring-offset-0 mt-0.5 h-4 w-4"
-                    />
+                <div className={`border rounded-xl p-5 space-y-4 transition-all duration-300 ${
+                  isScheduled ? 'bg-indigo-950/20 border-indigo-500/30 shadow-[0_0_15px_rgba(99,102,241,0.05)]' : 'bg-[#070707] border-neutral-850 hover:border-neutral-800'
+                }`}>
+                  <label className="flex items-start gap-3 cursor-pointer group">
+                    <div className={`mt-0.5 relative flex items-center justify-center w-5 h-5 rounded border transition-colors ${
+                      isScheduled ? 'bg-indigo-500 border-indigo-500 text-white' : 'border-neutral-700 bg-neutral-900 group-hover:border-indigo-500/50'
+                    }`}>
+                      <input
+                        type="checkbox"
+                        checked={isScheduled}
+                        onChange={e => setIsScheduled(e.target.checked)}
+                        className="absolute opacity-0 w-full h-full cursor-pointer"
+                      />
+                      {isScheduled && <Check className="w-3.5 h-3.5" strokeWidth={3} />}
+                    </div>
                     <div>
-                      <span className="block text-xs font-bold text-neutral-250">Schedule Blast for Future Time (IST)</span>
-                      <span className="block text-[10px] text-neutral-500 mt-0.5">Automates subsequent sequential triggering relative to Indian Standard Time (IST).</span>
+                      <span className={`block text-xs font-bold transition-colors ${
+                        isScheduled ? 'text-indigo-400' : 'text-neutral-250 group-hover:text-neutral-100'
+                      }`}>Schedule Blast for Future Time (IST)</span>
+                      <span className="block text-[10.5px] text-neutral-500 mt-1 leading-relaxed">Automate this message or approved template to be dispatched intelligently at your preferred time.</span>
                     </div>
                   </label>
 
                   {isScheduled && (
-                    <div className="pt-1.5 animate-fadeIn">
-                      <div className="space-y-1.5 w-full">
-                        <label className="block text-[11px] font-semibold text-neutral-400 flex items-center gap-1.5">
-                          <Calendar className="h-3.5 w-3.5 text-amber-500" /> Choose Date & Time (IST)
+                    <div className="pt-2 animate-fadeIn border-t border-indigo-500/20 mt-3">
+                      <div className="space-y-2 w-full pt-2">
+                        <label className="block text-[11px] font-bold text-indigo-400 flex items-center gap-1.5 uppercase tracking-wide">
+                          <Calendar className="h-4 w-4" /> Choose Date & Time (IST)
                         </label>
                         <input
                           type="datetime-local"
                           required
                           value={scheduleDateTime}
                           onChange={e => setScheduleDateTime(e.target.value)}
-                          className="w-full text-xs font-mono border border-neutral-800 bg-neutral-900 text-neutral-200 rounded-lg p-2.5 outline-none focus:ring-1 focus:ring-amber-500/50"
+                          className="w-full text-sm font-mono border-2 border-indigo-500/30 bg-indigo-950/30 text-indigo-100 rounded-lg p-3 outline-none focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/20 transition-all placeholder-indigo-500/30"
                         />
                       </div>
                     </div>
@@ -1384,31 +1480,47 @@ e.g.,
                 </div>
 
                 {/* Trigger Button Row */}
-                <div className="border-t border-neutral-900 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="border-t border-neutral-900 pt-5 flex items-center justify-between gap-4 bg-neutral-950/50 -mx-4 -mb-4 p-4 rounded-b-2xl">
                   <div className="text-xs text-neutral-400 font-mono">
-                    Targeting: <span className="font-bold text-amber-500 font-sans">{recipientCount} contacts</span>
+                    Target: <span className="font-bold text-amber-500 font-sans">{recipientCount} contacts</span>
                   </div>
                   <button
                     type="submit"
-                    disabled={isSending || recipientCount === 0 || !messageText.trim()}
-                    className="bg-amber-500 hover:bg-amber-400 disabled:bg-neutral-900 border border-amber-600/20 disabled:border-neutral-850 text-neutral-950 disabled:text-neutral-600 font-bold rounded-xl px-8 py-3.5 transition flex items-center justify-center gap-2.5 text-sm disabled:scale-100 active:scale-98 cursor-pointer shadow-lg shadow-amber-500/5 hover:shadow-amber-500/10"
+                    disabled={isSending || recipientCount === 0 || (!messageText.trim() && !templateId)}
+                    className={`disabled:bg-neutral-900 border disabled:border-neutral-850 disabled:text-neutral-600 font-bold rounded-xl transition-all duration-500 flex items-center justify-center gap-3 text-sm disabled:scale-100 active:scale-[0.98] cursor-pointer shadow-xl ${
+                      templateId 
+                        ? 'bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-400 hover:via-purple-400 hover:to-pink-400 text-white border-transparent px-10 py-5 shadow-purple-500/25 hover:shadow-purple-500/40 relative overflow-hidden group'
+                        : isScheduled 
+                          ? 'bg-indigo-600 hover:bg-indigo-500 border-indigo-500/50 text-white shadow-indigo-500/20 hover:shadow-indigo-500/30 px-10 py-4' 
+                          : 'bg-amber-500 hover:bg-amber-400 border-amber-600/30 text-neutral-950 shadow-amber-500/15 hover:shadow-amber-500/25 px-10 py-4'
+                    }`}
                   >
-                    {isSending ? (
-                      <>
-                        <RefreshCw className="h-4.5 w-4.5 animate-spin" />
-                        Dispatching Sequence...
-                      </>
-                    ) : isScheduled ? (
-                      <>
-                        <Clock className="h-4.5 w-4.5 text-neutral-950" />
-                        Schedule Campaign Blast ({recipientCount} Recip.)
-                      </>
-                    ) : (
-                      <>
-                        <Send className="h-4.5 w-4.5" />
-                        Automate Campaign Blast ({recipientCount} Recip.)
-                      </>
+                    {templateId && !isSending && (
+                      <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300 ease-out"></div>
                     )}
+                    <span className="relative z-10 flex items-center gap-3">
+                      {isSending ? (
+                        <>
+                          <RefreshCw className="h-5 w-5 animate-spin" />
+                          Processing...
+                        </>
+                      ) : templateId ? (
+                        <>
+                          {isScheduled ? <Clock className="h-5 w-5" /> : <Send className="h-5 w-5" />}
+                          {isScheduled ? "Schedule Broadcast" : "Launch Broadcast"}
+                        </>
+                      ) : isScheduled ? (
+                        <>
+                          <Clock className="h-5 w-5" />
+                          Schedule Blast
+                        </>
+                      ) : (
+                        <>
+                          <Send className="h-5 w-5" />
+                          Send Broadcast
+                        </>
+                      )}
+                    </span>
                   </button>
                 </div>
               </div>

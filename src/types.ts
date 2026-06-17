@@ -10,11 +10,19 @@ export interface MasterContact {
   name: string; // clean name without prefixes
   phone: string;
   countryCode: string;
-  groupId?: string; // only goes to one group
+  groupAssignments?: Record<string, string>; // mapping from clientId to groupId
+  rawData?: Record<string, any>;
+}
+
+export interface Client {
+  id: string;
+  name: string;
+  description?: string;
 }
 
 export interface ContactGroup {
   id: string;
+  clientId: string; // The client this group belongs to
   name: string;
   description: string;
   contacts: Contact[];
@@ -29,6 +37,7 @@ export interface BroadcastRecipient {
   deliveryStatus?: 'sent' | 'delivered' | 'read' | 'replied';
   replyText?: string;
   replyTime?: string;
+  cost?: number; // Cost deducted per message
 }
 
 export interface BroadcastHistory {
@@ -67,4 +76,6 @@ export interface ScheduledBroadcast {
   scheduleTimeIST: string; // "YYYY-MM-DD HH:mm"
   status: 'pending' | 'executed' | 'failed' | 'cancelled';
   createdAt: string;
+  twilioWhatsAppFrom?: string;
+  authkeyWhatsAppSender?: string;
 }

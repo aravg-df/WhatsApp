@@ -3,15 +3,24 @@ import {
   Users, Trash2, Edit2, Plus, Search, FileJson, 
   Sparkles, Check, CheckCircle2, UserPlus, FileText, AlertCircle 
 } from 'lucide-react';
-import { Contact, ContactGroup } from '../types.js';
+import { Contact, ContactGroup, MasterContact, Client } from '../types.js';
 
 interface GroupsTabProps {
+  clients: Client[];
   groups: ContactGroup[];
-  onSaveGroup: (group: ContactGroup) => Promise<void>;
+  onSaveGroup: (group: ContactGroup) => Promise<ContactGroup | void>;
   onDeleteGroup: (id: string) => Promise<void>;
+  onClientsChanged: () => Promise<void>;
 }
 
-export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: GroupsTabProps) {
+export default function GroupsTab({ clients, groups, onSaveGroup, onDeleteGroup, onClientsChanged }: GroupsTabProps) {
+  // Client selection
+  const [activeClientId, setActiveClientId] = useState<string>(clients[0]?.id || 'client-1');
+
+  // Client Management state
+  const [showClientManager, setShowClientManager] = useState(false);
+  const [newClientName, setNewClientName] = useState('');
+
   // Editing state
   const [activeGroup, setActiveGroup] = useState<ContactGroup | null>(null);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
@@ -32,6 +41,10 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
 
   // Search filter
   const [searchQuery, setSearchQuery] = useState('');
+  
+  const [pendingMasterBinds, setPendingMasterBinds] = useState<string[]>([]);
+  const [customAddCount, setCustomAddCount] = useState<string>('');
+  const [isPullingMaster, setIsPullingMaster] = useState(false);
 
   const resetGroupEditor = () => {
     setActiveGroup(null);
@@ -43,6 +56,8 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
     setSingleCode('91');
     setBulkText('');
     setImportFeedback(null);
+    setPendingMasterBinds([]);
+    setCustomAddCount('');
   };
 
   const handleEditGroupClick = (group: ContactGroup) => {
@@ -68,8 +83,9 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
     const phoneStr = cleanDigits(singlePhone);
     const codeStr = cleanDigits(singleCode) || '91';
     
-    // Check global duplicate
-    const existsGlobally = groups.some(g => g.contacts.some(c => c.phone === phoneStr));
+    // Check global duplicate FOR THIS CLIENT
+    const clientGroups = groups.filter(g => g.clientId === activeClientId);
+    const existsGlobally = clientGroups.some(g => g.contacts.some(c => c.phone === phoneStr));
     const existsLocally = activeGroup?.contacts.some(c => c.phone === phoneStr);
     
     if (existsGlobally || existsLocally) {
@@ -94,6 +110,7 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
       // Mock-state for creating new group before saving
       setActiveGroup({
         id: '',
+        clientId: activeClientId,
         name: groupName || 'New Group Workspace',
         description: groupDesc,
         contacts: [newContact]
@@ -204,8 +221,9 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
           }
         }
 
-        // Filter out duplicates globally and locally
-        const existingPhones = new Set(groups.flatMap(g => g.contacts.map(c => c.phone)));
+        // Filter out duplicates globally and locally FOR THIS CLIENT
+        const clientGroups = groups.filter(g => g.clientId === activeClientId);
+        const existingPhones = new Set(clientGroups.flatMap(g => g.contacts.map(c => c.phone)));
         if (activeGroup) {
           activeGroup.contacts.forEach(c => existingPhones.add(c.phone));
         }
@@ -232,6 +250,7 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
           } else {
             setActiveGroup({
               id: '',
+              clientId: activeClientId,
               name: groupName || 'Imported Workspace',
               description: groupDesc,
               contacts: uniqueContacts
@@ -252,19 +271,116 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
     }, 400);
   };
 
+  const handleAddUnassignedMaster = async (count: number) => {
+    setIsPullingMaster(true);
+    try {
+        const res = await fetch('/api/master-contacts');
+        const masters: MasterContact[] = await res.json();
+        const unassigned = masters.filter(c => !c.groupAssignments || !c.groupAssignments[activeClientId]);
+        // exclude already in our group or other globally
+        const clientGroups = groups.filter(g => g.clientId === activeClientId);
+        const existingPhones = new Set(clientGroups.flatMap(g => g.contacts.map(c => c.phone)));
+        if (activeGroup) {
+          activeGroup.contacts.forEach(c => existingPhones.add(c.phone));
+        }
+
+        const toAdd: Contact[] = [];
+        const toBind: string[] = [];
+        for (const c of unassigned) {
+            // we skip ones if they already exist globally
+            if (!existingPhones.has(c.phone)) {
+                toAdd.push({
+                    id: c.id || ('c-' + Math.random().toString(36).substring(2, 9)), 
+                    name: c.name || 'Customer',
+                    phone: c.phone,
+                    countryCode: c.countryCode || '91'
+                });
+                toBind.push(c.id);
+                existingPhones.add(c.phone);
+                if (toAdd.length >= count) break;
+            }
+        }
+
+        if (toAdd.length > 0) {
+           if (activeGroup) {
+               setActiveGroup({
+                 ...activeGroup,
+                 contacts: [...activeGroup.contacts, ...toAdd]
+               });
+           } else {
+               setActiveGroup({
+                 id: '',
+                 clientId: activeClientId,
+                 name: groupName || 'New Group Workspace',
+                 description: groupDesc,
+                 contacts: toAdd
+               });
+           }
+           setPendingMasterBinds(prev => [...prev, ...toBind]);
+           alert(`Pulled ${toAdd.length} unassigned contacts. They will be bound to this group when you save.`);
+        } else {
+            alert("No more unique unassigned master contacts available to add.");
+        }
+    } catch(err: any) {
+        alert("Failed to pull from master: " + err.message);
+    } finally {
+        setIsPullingMaster(false);
+    }
+  };
+
   const handleSaveGroupSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!groupName.trim()) return;
 
     const groupPayload: ContactGroup = {
       id: activeGroup ? activeGroup.id : '',
+      clientId: activeGroup ? activeGroup.clientId : activeClientId,
       name: groupName.trim(),
       description: groupDesc.trim(),
       contacts: activeGroup ? activeGroup.contacts : []
     };
 
-    await onSaveGroup(groupPayload);
+    const savedGroup = await onSaveGroup(groupPayload);
+    
+    // Check if we need to bind any grabbed master contacts
+    if (savedGroup && pendingMasterBinds.length > 0) {
+      try {
+        await fetch('/api/master-contacts/bulk-group', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contactIds: pendingMasterBinds,
+            groupId: (savedGroup as ContactGroup).id,
+            clientId: activeClientId
+          })
+        });
+      } catch (err) {
+        console.error("Failed to bind master contacts to saved group", err);
+      }
+    }
+
     resetGroupEditor();
+  };
+
+  const handleCreateClientSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newClientName.trim()) return;
+    try {
+      const res = await fetch('/api/clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newClientName.trim() })
+      });
+      if (res.ok) {
+        await onClientsChanged();
+        const clientData = await res.json();
+        setActiveClientId(clientData.id);
+        setNewClientName('');
+        setShowClientManager(false);
+      }
+    } catch (err: any) {
+      alert("Failed creating client: " + err.message);
+    }
   };
 
   // Filter contacts being viewed
@@ -296,8 +412,8 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-45">
+          <div className="flex flex-col gap-6 lg:flex-row">
+            <div className="flex-[2] space-y-5">
               <div>
                 <label className="block text-xs font-semibold text-neutral-450 mb-1.5">Group Name*</label>
                 <input
@@ -320,92 +436,102 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
                 />
               </div>
 
-              {/* Single Recipient Input */}
-              <div className="p-4 bg-neutral-950 border border-neutral-900 rounded-xl space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Single Recipient Input */}
+                <div className="p-4 bg-neutral-950 border border-neutral-900 rounded-xl space-y-3.5">
+
                 <div className="flex items-center gap-2 text-neutral-300">
                   <UserPlus className="h-4.5 w-4.5 text-amber-500" />
                   <span className="font-semibold text-xs uppercase tracking-wider font-mono">Quick-Add One Contact</span>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="flex flex-col gap-2.5">
                   <input
                     type="text"
                     placeholder="Name"
                     value={singleName}
                     onChange={e => setSingleName(e.target.value)}
-                    className="text-xs border border-neutral-850 bg-[#0c0c0c] text-neutral-200 rounded px-3 py-2 focus:ring-1 focus:ring-amber-500/55 outline-none placeholder:text-neutral-655"
+                    className="w-full text-xs border border-neutral-850 bg-[#0c0c0c] text-neutral-200 rounded px-3 py-2.5 focus:ring-1 focus:ring-amber-500/55 outline-none placeholder:text-neutral-650"
                   />
-                  <div className="flex">
+                  <div className="flex w-full">
                     <input
                       type="text"
                       placeholder="91"
                       title="Country Code"
                       value={singleCode}
                       onChange={e => setSingleCode(e.target.value)}
-                      className="w-12 text-center text-xs border border-neutral-850 bg-neutral-900 rounded-l px-1 py-2 border-r-0 font-medium text-neutral-400 font-mono"
+                      className="w-12 text-center text-xs border border-neutral-850 bg-neutral-900 rounded-l px-1 py-2.5 border-r-0 font-medium text-neutral-400 font-mono"
                     />
                     <input
                       type="text"
                       placeholder="Phone (10 digits)"
                       value={singlePhone}
                       onChange={e => setSinglePhone(e.target.value)}
-                      className="flex-1 text-xs border border-neutral-855 bg-[#0c0c0c] text-neutral-200 rounded-r px-3 py-2 focus:ring-1 focus:ring-amber-500/55 outline-none placeholder:text-neutral-655 font-mono"
+                      className="flex-1 text-xs border border-neutral-855 bg-[#0c0c0c] text-neutral-200 rounded-r px-3 py-2.5 focus:ring-1 focus:ring-amber-500/55 outline-none placeholder:text-neutral-650 font-mono w-full min-w-0"
                     />
                   </div>
                   <button
                     type="button"
                     onClick={handleAddSingleContact}
-                    className="w-full bg-neutral-900 hover:bg-neutral-850 text-neutral-200 text-xs font-semibold border border-neutral-800 rounded py-2 transition active:scale-95 cursor-pointer"
+                    className="w-full bg-neutral-900 hover:bg-neutral-850 text-neutral-200 text-xs font-semibold border border-neutral-800 rounded py-2.5 transition active:scale-95 cursor-pointer"
                   >
                     Add Contact
                   </button>
                 </div>
               </div>
-            </div>
 
-            {/* Advanced Bulk Importer */}
-            <div className="flex flex-col flex-1 border border-neutral-900 rounded-xl p-4 bg-neutral-950">
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-1.5">
-                  <FileJson className="h-4 w-4 text-amber-500" />
-                  <span className="font-semibold text-xs text-neutral-300 uppercase tracking-wider font-mono">Multi-Contact Bulk Paste</span>
+              {/* Quick Extract from Master Data */}
+              <div className="p-4 bg-indigo-950/10 border border-indigo-900/40 rounded-xl space-y-3.5">
+                <div className="flex items-center gap-2 text-indigo-300">
+                  <Users className="h-4 w-4" />
+                  <span className="font-semibold text-xs uppercase tracking-wider font-mono">Pull Unassigned From Master</span>
                 </div>
-                <span className="text-[10px] text-neutral-550 font-mono">Painless importing</span>
-              </div>
-              <p className="text-[11px] text-neutral-450 leading-relaxed mb-3">
-                Paste any data! Supports raw phone lists (vertical), CSV records (<span className="text-neutral-350 font-semibold font-mono">Name, Phone, Code</span>), or your existing <span className="text-neutral-350 font-semibold font-mono">customer.json</span> format.
-              </p>
-              <textarea
-                rows={4}
-                value={bulkText}
-                onChange={e => setBulkText(e.target.value)}
-                placeholder={`--- SUPPORTED PARSING SAMPLES ---
-Option A: [
-  {"name": "Alice Smith", "phone": "9876543210", "countryCode": "91"}
-]
-Option B (CSV format):
-Bob Martin, 5551234567, 1
-Option C (Simple list):
-+919876543210
-+15559871111`}
-                className="w-full text-xs font-mono border border-neutral-850 bg-[#0c0c0c] text-neutral-200 rounded-lg p-3 focus:ring-1 focus:ring-amber-500/50 outline-none flex-1 min-h-[140px] placeholder:text-neutral-700"
-              />
+                <div className="flex flex-wrap items-center gap-2">
+                  <button 
+                    type="button"
+                    disabled={isPullingMaster}
+                    onClick={() => handleAddUnassignedMaster(100)}
+                    className="text-[10px] uppercase font-mono font-bold bg-[#0c0c0c] hover:bg-neutral-900 text-indigo-400 border border-indigo-900/50 px-3 py-1.5 rounded transition cursor-pointer disabled:opacity-50"
+                  >
+                    +100
+                  </button>
+                  <button 
+                    type="button"
+                    disabled={isPullingMaster}
+                    onClick={() => handleAddUnassignedMaster(200)}
+                    className="text-[10px] uppercase font-mono font-bold bg-[#0c0c0c] hover:bg-neutral-900 text-indigo-400 border border-indigo-900/50 px-3 py-1.5 rounded transition cursor-pointer disabled:opacity-50"
+                  >
+                    +200
+                  </button>
+                  <button 
+                    type="button"
+                    disabled={isPullingMaster}
+                    onClick={() => handleAddUnassignedMaster(300)}
+                    className="text-[10px] uppercase font-mono font-bold bg-[#0c0c0c] hover:bg-neutral-900 text-indigo-400 border border-indigo-900/50 px-3 py-1.5 rounded transition cursor-pointer disabled:opacity-50"
+                  >
+                    +300
+                  </button>
 
-              <div className="mt-3 flex items-center justify-between gap-3">
-                <button
-                  type="button"
-                  onClick={handleBulkImport}
-                  disabled={isImporting || !bulkText.trim()}
-                  className="bg-neutral-900 hover:bg-neutral-850 disabled:bg-neutral-950 border border-neutral-800 text-neutral-200 disabled:text-neutral-600 text-xs font-semibold px-4.5 py-2 rounded-lg transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  {isImporting ? 'Parsing Records...' : 'Import Data'}
-                </button>
-                {importFeedback && (
-                  <span className={`text-[11px] font-medium block flex-1 text-right  ${
-                    importFeedback.includes('Successfully') ? 'text-emerald-400' : 'text-rose-400'
-                  }`}>
-                    {importFeedback}
-                  </span>
-                )}
+                  <div className="flex ml-auto w-full sm:w-auto mt-2 sm:mt-0 gap-2">
+                    <input 
+                      type="number"
+                      min="1"
+                      placeholder="Custom Qty"
+                      value={customAddCount}
+                      onChange={e => setCustomAddCount(e.target.value)}
+                      className="w-24 text-[10px] bg-[#0c0c0c] border border-indigo-900/50 rounded px-2 text-indigo-200 outline-none focus:ring-1 focus:ring-indigo-500/50"
+                    />
+                    <button 
+                      type="button"
+                      disabled={isPullingMaster || !customAddCount}
+                      onClick={() => handleAddUnassignedMaster(parseInt(customAddCount) || 0)}
+                      className="text-[10px] uppercase font-mono font-bold bg-indigo-950 hover:bg-indigo-900 text-indigo-200 border border-indigo-800 px-3 py-1.5 rounded transition cursor-pointer disabled:opacity-50"
+                    >
+                      Pull
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {/* End of side-by-side grid */}
               </div>
             </div>
           </div>
@@ -496,8 +622,47 @@ Option C (Simple list):
       ) : (
         /* Groups Directory Home View */
         <div className="space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-[#0c0c0c] border border-neutral-900 rounded-xl p-5">
-            <div>
+            {/* Client Selector Bar */}
+            <div className="bg-[#0c0c0c] border border-neutral-900 rounded-xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <label className="text-xs text-neutral-400 uppercase font-mono tracking-wider font-semibold">Active Client Workspace</label>
+                {!showClientManager ? (
+                  <select 
+                    value={activeClientId}
+                    onChange={e => setActiveClientId(e.target.value)}
+                    className="bg-neutral-950 border border-neutral-850 text-amber-500 rounded-lg px-3 py-1.5 text-sm font-bold outline-none cursor-pointer focus:border-amber-500/50"
+                  >
+                    {clients.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <form onSubmit={handleCreateClientSubmit} className="flex items-center gap-2">
+                    <input 
+                      type="text"
+                      autoFocus
+                      placeholder="New Client Name..."
+                      value={newClientName}
+                      onChange={e => setNewClientName(e.target.value)}
+                      className="bg-neutral-950 border border-neutral-850 rounded-lg px-3 py-1.5 text-sm text-white outline-none w-48"
+                    />
+                    <button type="submit" className="bg-amber-500 hover:bg-amber-400 text-neutral-950 px-3 py-1.5 rounded-lg text-xs font-bold">Save</button>
+                    <button type="button" onClick={() => setShowClientManager(false)} className="bg-neutral-800 text-white px-3 py-1.5 rounded-lg text-xs font-bold">Cancel</button>
+                  </form>
+                )}
+              </div>
+              {!showClientManager && (
+                <button 
+                  onClick={() => setShowClientManager(true)}
+                  className="text-xs text-amber-500 hover:text-amber-400 font-semibold border border-amber-500/30 hover:border-amber-500/50 px-3 py-1.5 rounded-lg transition"
+                >
+                  + Add New Client
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-[#0c0c0c] border border-neutral-900 rounded-xl p-5">
+              <div>
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-neutral-900 border border-neutral-800 text-amber-500 rounded-lg shrink-0">
                   <Users className="h-5 w-5" />
@@ -517,12 +682,12 @@ Option C (Simple list):
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {groups.length === 0 ? (
+            {groups.filter(g => g.clientId === activeClientId).length === 0 ? (
               <div className="col-span-full border border-dashed border-neutral-850 rounded-2xl py-14 text-center bg-[#0c0c0c]">
                 <Users className="h-8 w-8 text-neutral-700 mx-auto mb-3" />
-                <h4 className="font-serif text-neutral-300 text-base">No Contact Groups Defined</h4>
+                <h4 className="font-serif text-neutral-300 text-base">No Groups For Active Client</h4>
                 <p className="text-xs text-neutral-500 max-w-sm mx-auto mt-1 mb-5">
-                  Define user segment lists or copy-paste list of numbers to launch broadcasting runs.
+                  Define user segment lists or copy-paste list of numbers to launch broadcasting runs for this client.
                 </p>
                 <button
                   onClick={handleCreateGroupClick}
@@ -532,7 +697,7 @@ Option C (Simple list):
                 </button>
               </div>
             ) : (
-              groups.map(group => (
+              groups.filter(g => g.clientId === activeClientId).map(group => (
                 <div key={group.id} className="bg-[#0c0c0c] border border-neutral-900 rounded-xl p-5 shadow-sm flex flex-col justify-between hover:border-neutral-800 transition group">
                   <div className="space-y-2.5">
                     <div className="flex justify-between items-start gap-2">

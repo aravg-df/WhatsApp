@@ -16,7 +16,10 @@ import {
   getMasterContacts,
   saveMasterContact,
   updateMasterContactGroupId,
-  deleteMasterContact
+  deleteMasterContact,
+  getClients,
+  saveClient,
+  deleteClient
 } from './src/dbStore.js';
 import { Contact, ContactGroup, BroadcastHistory, BroadcastRecipient, ScheduledBroadcast, MasterContact } from './src/types.js';
 
@@ -244,12 +247,12 @@ async function startServer() {
 
   app.put('/api/master-contacts/bulk-group', async (req, res) => {
     try {
-      const { contactIds, groupId } = req.body;
-      if (!Array.isArray(contactIds)) {
-        return res.status(400).json({ error: 'Expected an array of contactIds' });
+      const { contactIds, groupId, clientId } = req.body;
+      if (!Array.isArray(contactIds) || !clientId) {
+        return res.status(400).json({ error: 'Expected an array of contactIds and a clientId' });
       }
       for (const id of contactIds) {
-        await updateMasterContactGroupId(id, groupId || null);
+        await updateMasterContactGroupId(id, clientId, groupId || null);
       }
       res.json({ success: true, message: `Updated group for ${contactIds.length} contacts.` });
     } catch (err: any) {
@@ -267,6 +270,80 @@ async function startServer() {
         await deleteMasterContact(id);
       }
       res.json({ success: true, message: `Deleted ${contactIds.length} contacts.` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Balance Endpoints
+  app.get('/api/balance/twilio', async (req, res) => {
+    try {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const token = process.env.TWILIO_AUTH_TOKEN;
+      if (!sid || !token) {
+        return res.status(400).json({ error: 'Twilio not configured' });
+      }
+
+      const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Balance.json`;
+      const authHeader = 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64');
+      const response = await fetch(url, { headers: { 'Authorization': authHeader } });
+      const data = await response.json() as any;
+      
+      if (response.ok) {
+        res.json({ balance: data.balance, currency: data.currency });
+      } else {
+        res.status(500).json({ error: data.message || 'Failed to fetch Twilio balance' });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/balance/authkey', async (req, res) => {
+    try {
+      const apiKey = process.env.AUTHKEY_API_KEY;
+      if (!apiKey) {
+        return res.status(400).json({ error: 'Authkey not configured' });
+      }
+
+      const response = await fetch(`https://console.authkey.io/restapi/getbalance.php?authkey=${apiKey.trim()}`);
+      const text = await response.text();
+      let parsed = {};
+      try {
+        parsed = JSON.parse(text);
+      } catch (e) {
+        parsed = { balance: text }; // Fallback if API returns raw text for balance
+      }
+      res.json(parsed);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Clients Endpoints
+  app.get('/api/clients', async (req, res) => {
+    try {
+      res.json(await getClients());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/clients', async (req, res) => {
+    try {
+      const client = req.body;
+      if (!client.name) return res.status(400).json({ error: 'Client name is required' });
+      if (!client.id) client.id = 'client-' + Math.random().toString(36).substring(2, 9);
+      res.json(await saveClient(client));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/clients/:id', async (req, res) => {
+    try {
+      await deleteClient(req.params.id);
+      res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -347,8 +424,42 @@ async function startServer() {
     }
   });
 
+  // Balance Helpers
+  async function getTwilioBalanceLive(): Promise<number> {
+    const sid = process.env.TWILIO_ACCOUNT_SID;
+    const token = process.env.TWILIO_AUTH_TOKEN;
+    if (!sid || !token) return 0;
+    try {
+      const url = `https://api.twilio.com/2010-04-01/Accounts/${sid}/Balance.json`;
+      const authHeader = 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64');
+      const response = await fetch(url, { headers: { 'Authorization': authHeader } });
+      const data = await response.json() as any;
+      if (response.ok) {
+        return parseFloat(data.balance);
+      }
+    } catch { }
+    return 0;
+  }
+
+  async function getAuthkeyBalanceLive(): Promise<number> {
+    const apiKey = process.env.AUTHKEY_API_KEY;
+    if (!apiKey) return 0;
+    try {
+      const response = await fetch(`https://console.authkey.io/restapi/getbalance.php?authkey=${apiKey.trim()}`);
+      const text = await response.text();
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(text);
+        return parseFloat(parsed.balance || 0);
+      } catch (e) {
+        return parseFloat(text); // Fallback if API returns raw text for balance
+      }
+    } catch { }
+    return 0;
+  }
+
   // SMS Helpers
-  async function sendTwilioSMS(to: string, message: string): Promise<{ success: boolean; error?: string }> {
+  async function sendTwilioSMS(to: string, message: string): Promise<{ success: boolean; error?: string; cost?: number }> {
     const sid = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
     const from = process.env.TWILIO_FROM_NUMBER;
@@ -356,6 +467,8 @@ async function startServer() {
     if (!sid || !token || !from) {
       return { success: false, error: 'Twilio credentials are not configured on the server.' };
     }
+
+    const startBalance = await getTwilioBalanceLive();
 
     try {
       // Normalize number
@@ -382,18 +495,22 @@ async function startServer() {
       });
 
       const data = await response.json() as any;
+      const endBalance = await getTwilioBalanceLive();
+      const cost = parseFloat((startBalance - endBalance).toFixed(5));
 
       if (response.ok) {
-        return { success: true };
+        return { success: true, cost: cost > 0 ? cost : undefined };
       } else {
-        return { success: false, error: data.message || `Twilio Code ${data.code || response.status}: ${data.message || 'Error'}` };
+        return { success: false, error: data.message || `Twilio Code ${data.code || response.status}: ${data.message || 'Error'}`, cost: cost > 0 ? cost : undefined };
       }
     } catch (err: any) {
-      return { success: false, error: err.message || 'Unknown network error calling Twilio' };
+      const endBalance = await getTwilioBalanceLive();
+      const cost = parseFloat((startBalance - endBalance).toFixed(5));
+      return { success: false, error: err.message || 'Unknown network error calling Twilio', cost: cost > 0 ? cost : undefined };
     }
   }
 
-  async function sendAuthkeySMS(phone: string, countryCode: string, message: string): Promise<{ success: boolean; error?: string }> {
+  async function sendAuthkeySMS(phone: string, countryCode: string, message: string): Promise<{ success: boolean; error?: string; cost?: number }> {
     const apiKey = process.env.AUTHKEY_API_KEY;
     const senderId = process.env.AUTHKEY_SENDER_ID;
 
@@ -402,6 +519,8 @@ async function startServer() {
       console.log(`[SIMULATOR] Authkey SMS credentials not configured. Simulating successful SMS delivery to ${phone}`);
       return { success: true };
     }
+
+    const startBalance = await getAuthkeyBalanceLive();
 
     try {
       const cleanCountry = countryCode.replace('+', '').trim();
@@ -421,26 +540,31 @@ async function startServer() {
       });
 
       const text = await response.text();
+      const endBalance = await getAuthkeyBalanceLive();
+      const cost = parseFloat((startBalance - endBalance).toFixed(5));
+
       try {
         const data = JSON.parse(text);
         if (data.status === 'success' || data.success === true) {
-          return { success: true };
+          return { success: true, cost: cost > 0 ? cost : undefined };
         } else {
-          return { success: false, error: data.message || `Authkey API failure: ${text}` };
+          return { success: false, error: data.message || `Authkey API failure: ${text}`, cost: cost > 0 ? cost : undefined };
         }
       } catch {
         if (text.toLowerCase().includes('success') || text.toLowerCase().includes('submitted')) {
-          return { success: true };
+          return { success: true, cost: cost > 0 ? cost : undefined };
         }
-        return { success: false, error: `Response: ${text.substring(0, 100)}` };
+        return { success: false, error: `Response: ${text.substring(0, 100)}`, cost: cost > 0 ? cost : undefined };
       }
     } catch (err: any) {
-      return { success: false, error: err.message || 'Unknown network error calling Authkey' };
+      const endBalance = await getAuthkeyBalanceLive();
+      const cost = parseFloat((startBalance - endBalance).toFixed(5));
+      return { success: false, error: err.message || 'Unknown network error calling Authkey', cost: cost > 0 ? cost : undefined };
     }
   }
 
   // --- WhatsApp Helpers ---
-  async function sendTwilioWhatsApp(to: string, message: string, templateId?: string, senderOverride?: string): Promise<{ success: boolean; error?: string }> {
+  async function sendTwilioWhatsApp(to: string, message: string, templateId?: string, senderOverride?: string): Promise<{ success: boolean; error?: string; cost?: number }> {
     const sid = process.env.TWILIO_ACCOUNT_SID;
     const token = process.env.TWILIO_AUTH_TOKEN;
     let from = senderOverride || process.env.TWILIO_WHATSAPP_FROM_NUMBER || process.env.TWILIO_FROM_NUMBER;
@@ -448,6 +572,8 @@ async function startServer() {
     if (!sid || !token || !from) {
       return { success: false, error: 'Twilio credentials are not configured on the server.' };
     }
+
+    const startBalance = await getTwilioBalanceLive();
 
     try {
       let normalizedTo = to.trim();
@@ -484,18 +610,22 @@ async function startServer() {
       });
 
       const data = await response.json() as any;
+      const endBalance = await getTwilioBalanceLive();
+      const cost = parseFloat((startBalance - endBalance).toFixed(5));
 
       if (response.ok) {
-        return { success: true };
+        return { success: true, cost: cost > 0 ? cost : undefined };
       } else {
-        return { success: false, error: data.message || `Twilio WhatsApp Code ${data.code || response.status}: ${data.message || 'Error'}` };
+        return { success: false, error: data.message || `Twilio WhatsApp Code ${data.code || response.status}: ${data.message || 'Error'}`, cost: cost > 0 ? cost : undefined };
       }
     } catch (err: any) {
-      return { success: false, error: err.message || 'Unknown network error calling Twilio WhatsApp' };
+      const endBalance = await getTwilioBalanceLive();
+      const cost = parseFloat((startBalance - endBalance).toFixed(5));
+      return { success: false, error: err.message || 'Unknown network error calling Twilio WhatsApp', cost: cost > 0 ? cost : undefined };
     }
   }
 
-  async function sendAuthkeyWhatsAppBulk(recipients: Contact[], templateId: string, message: string, senderOverride?: string): Promise<{ success: boolean; error?: string }> {
+  async function sendAuthkeyWhatsAppBulk(recipients: Contact[], templateId: string, message: string, senderOverride?: string): Promise<{ success: boolean; error?: string; costPerMessage?: number }> {
     const apiKey = process.env.AUTHKEY_API_KEY;
     const senderId = senderOverride || process.env.AUTHKEY_SENDER_ID || '';
 
@@ -503,6 +633,8 @@ async function startServer() {
       console.log(`[SIMULATOR] Authkey credentials not configured. Simulating successful WhatsApp automated bulk sending to ${recipients.length} contacts with template ID ${templateId}`);
       return { success: true };
     }
+
+    const startBalance = await getAuthkeyBalanceLive();
 
     try {
       const url = 'https://console.authkey.io/restapi/requestjson_v2.0.php';
@@ -532,24 +664,37 @@ async function startServer() {
       });
 
       const text = await response.text();
+      const endBalance = await getAuthkeyBalanceLive();
+      const totalCost = parseFloat((startBalance - endBalance).toFixed(5));
+      let costPerMessage: number | undefined = undefined;
+      if (totalCost > 0 && recipients.length > 0) {
+        costPerMessage = parseFloat((totalCost / recipients.length).toFixed(5));
+      }
+
       try {
         const data = JSON.parse(text);
         if (data.status === 'success' || data.success === true || data.Message === 'success' || data.message === 'success' || data.status === 'Success') {
-          return { success: true };
+          return { success: true, costPerMessage };
         } else {
           if (text.toLowerCase().includes('success') || text.toLowerCase().includes('submitted') || text.toLowerCase().includes('sent')) {
-            return { success: true };
+            return { success: true, costPerMessage };
           }
-          return { success: false, error: data.message || data.Message || `Authkey WhatsApp Bulk API failure: ${text}` };
+          return { success: false, error: data.message || data.Message || `Authkey WhatsApp Bulk API failure: ${text}`, costPerMessage };
         }
       } catch {
         if (text.toLowerCase().includes('success') || text.toLowerCase().includes('submitted') || text.toLowerCase().includes('sent')) {
-          return { success: true };
+          return { success: true, costPerMessage };
         }
-        return { success: false, error: `Response: ${text.substring(0, 100)}` };
+        return { success: false, error: `Response: ${text.substring(0, 100)}`, costPerMessage };
       }
     } catch (err: any) {
-      return { success: false, error: err.message || 'Unknown network error calling Authkey WhatsApp Bulk API' };
+      const endBalance = await getAuthkeyBalanceLive();
+      const totalCost = parseFloat((startBalance - endBalance).toFixed(5));
+      let costPerMessage: number | undefined = undefined;
+      if (totalCost > 0 && recipients.length > 0) {
+        costPerMessage = parseFloat((totalCost / recipients.length).toFixed(5));
+      }
+      return { success: false, error: err.message || 'Unknown network error calling Authkey WhatsApp Bulk API', costPerMessage };
     }
   }
 
@@ -585,7 +730,8 @@ async function startServer() {
           name: contact.name || 'Unknown Contact',
           status: res.success ? 'success' : 'failed',
           channelUsed: 'authkey',
-          error: res.error || (res.success ? undefined : 'Authkey WhatsApp bulk submission failed')
+          error: res.error || (res.success ? undefined : 'Authkey WhatsApp bulk submission failed'),
+          cost: res.costPerMessage
         };
         
         const recIndex = historyItem.recipients.findIndex(r => r.phone === fullPhoneWithCode);
@@ -632,21 +778,26 @@ async function startServer() {
             if (twilioResult.success && authkeyResult.success) {
               recipientRecord.status = 'success';
               recipientRecord.channelUsed = 'twilio';
+              recipientRecord.cost = twilioResult.cost;
             } else if (twilioResult.success) {
               recipientRecord.status = 'success';
               recipientRecord.channelUsed = 'twilio';
               recipientRecord.error = `Twilio OK, Authkey failed: ${authkeyResult.error || 'Unknown'}`;
+              recipientRecord.cost = twilioResult.cost;
             } else if (authkeyResult.success) {
               recipientRecord.status = 'success';
               recipientRecord.channelUsed = 'authkey';
               recipientRecord.error = `Twilio failed: ${twilioResult.error || 'Unknown'}, Authkey OK`;
+              recipientRecord.cost = authkeyResult.costPerMessage;
             } else {
               recipientRecord.status = 'failed';
               recipientRecord.error = `Twilio: ${twilioResult.error || 'Failed'}. Authkey: ${authkeyResult.error || 'Failed'}`;
+              recipientRecord.cost = (twilioResult.cost || 0) + (authkeyResult.costPerMessage || 0) || undefined;
             }
           } else if (gateway === 'twilio') {
             recipientRecord.channelUsed = 'twilio';
             const res = await sendTwilioWhatsApp(fullPhoneWithCode, message, templateId, twilioWhatsAppFrom);
+            recipientRecord.cost = res.cost;
             if (res.success) {
               recipientRecord.status = 'success';
             } else {
@@ -656,6 +807,7 @@ async function startServer() {
           } else {
             recipientRecord.channelUsed = 'authkey';
             const res = await sendAuthkeyWhatsAppBulk([contact], templateId, message, authkeyWhatsAppSender);
+            recipientRecord.cost = res.costPerMessage;
             if (res.success) {
               recipientRecord.status = 'success';
             } else {
@@ -666,29 +818,32 @@ async function startServer() {
         } else {
           // Standard SMS
           if (gateway === 'both') {
-            // Attempt Twilio first, fall back or try both. The prompt states "option to send message to twilio or auth key".
-            // If BOTH is selected, let's trigger both channels and declare overall success if at least one succeeded.
             let twilioResult = await sendTwilioSMS(fullPhoneWithCode, message);
             let authkeyResult = await sendAuthkeySMS(contact.phone, contact.countryCode, message);
 
             if (twilioResult.success && authkeyResult.success) {
               recipientRecord.status = 'success';
-              recipientRecord.channelUsed = 'twilio'; // notes
+              recipientRecord.channelUsed = 'twilio';
+              recipientRecord.cost = twilioResult.cost;
             } else if (twilioResult.success) {
               recipientRecord.status = 'success';
               recipientRecord.channelUsed = 'twilio';
               recipientRecord.error = `Twilio OK, Authkey failed: ${authkeyResult.error || 'Unknown'}`;
+              recipientRecord.cost = twilioResult.cost;
             } else if (authkeyResult.success) {
               recipientRecord.status = 'success';
               recipientRecord.channelUsed = 'authkey';
               recipientRecord.error = `Twilio failed: ${twilioResult.error || 'Unknown'}, Authkey OK`;
+              recipientRecord.cost = authkeyResult.cost;
             } else {
               recipientRecord.status = 'failed';
               recipientRecord.error = `Twilio: ${twilioResult.error || 'Failed'}. Authkey: ${authkeyResult.error || 'Failed'}`;
+              recipientRecord.cost = (twilioResult.cost || 0) + (authkeyResult.cost || 0) || undefined;
             }
           } else if (gateway === 'twilio') {
             recipientRecord.channelUsed = 'twilio';
             const res = await sendTwilioSMS(fullPhoneWithCode, message);
+            recipientRecord.cost = res.cost;
             if (res.success) {
               recipientRecord.status = 'success';
             } else {
@@ -699,6 +854,7 @@ async function startServer() {
             // authkey
             recipientRecord.channelUsed = 'authkey';
             const res = await sendAuthkeySMS(contact.phone, contact.countryCode, message);
+            recipientRecord.cost = res.cost;
             if (res.success) {
               recipientRecord.status = 'success';
             } else {
@@ -994,6 +1150,8 @@ async function startServer() {
         templateId,
         message,
         scheduleTimeIST,
+        twilioWhatsAppFrom,
+        authkeyWhatsAppSender,
         status: 'pending',
         createdAt: new Date().toISOString()
       };
@@ -1084,8 +1242,8 @@ async function startServer() {
             sched.message,
             sched.channel,
             sched.templateId || '',
-            process.env.TWILIO_WHATSAPP_FROM_NUMBER || '',
-            process.env.AUTHKEY_WHATSAPP_SENDER_ID || ''
+            sched.twilioWhatsAppFrom || process.env.TWILIO_WHATSAPP_FROM_NUMBER || '',
+            sched.authkeyWhatsAppSender || process.env.AUTHKEY_WHATSAPP_SENDER_ID || ''
           );
         }
       }

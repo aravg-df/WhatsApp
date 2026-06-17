@@ -280,7 +280,7 @@ export default function HistoryTab({ historyList, onClearHistory, onTriggerRetry
                             <tr>
                               <th className="py-2.5 px-4 w-1/3">Recipient Description</th>
                               <th className="py-2.5 px-4 w-1/4 font-mono">Destination Number</th>
-                              <th className="py-2.5 px-4 w-1/6 font-mono">Service Channel</th>
+                              <th className="py-2.5 px-4 w-1/6 font-mono">Channel & Cost</th>
                               <th className="py-2.5 px-4 text-right">Status Details</th>
                             </tr>
                           </thead>
@@ -307,9 +307,16 @@ export default function HistoryTab({ historyList, onClearHistory, onTriggerRetry
                                     {rec.phone}
                                   </td>
                                   <td className="py-2.5 px-4 uppercase text-[10px] font-bold font-mono text-neutral-450">
-                                    <span className="bg-neutral-905 text-neutral-400 px-1.5 py-0.5 rounded border border-neutral-850">
-                                      {rec.channelUsed || run.gateway}
-                                    </span>
+                                    <div className="flex flex-col items-start gap-1">
+                                      <span className="bg-neutral-905 text-neutral-400 px-1.5 py-0.5 rounded border border-neutral-850">
+                                        {rec.channelUsed || run.gateway}
+                                      </span>
+                                      {rec.cost !== undefined && (
+                                        <span className="text-amber-500/80 font-mono text-[9px] lowercase" title="Deducted balance cost">
+                                          cost: {rec.cost}
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="py-2.5 px-4 text-right">
                                     {rec.status === 'success' ? (

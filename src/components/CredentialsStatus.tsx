@@ -1,5 +1,5 @@
-import React from 'react';
-import { ShieldCheck, AlertTriangle, Key, HelpCircle, Server } from 'lucide-react';
+import React, { useState } from 'react';
+import { ShieldCheck, AlertTriangle, Key, HelpCircle, Server, RefreshCw, Wallet } from 'lucide-react';
 import { SystemConfigStatus } from '../types.js';
 
 interface CredentialsStatusProps {
@@ -8,6 +8,11 @@ interface CredentialsStatusProps {
 }
 
 export default function CredentialsStatus({ status, onRefresh }: CredentialsStatusProps) {
+  const [twilioBalance, setTwilioBalance] = useState<{ balance: string; currency: string; inrRate?: number } | null>(null);
+  const [twilioBalanceLoading, setTwilioBalanceLoading] = useState(false);
+  const [authkeyBalance, setAuthkeyBalance] = useState<any>(null);
+  const [authkeyBalanceLoading, setAuthkeyBalanceLoading] = useState(false);
+
   if (!status) {
     return (
       <div className="animate-pulse bg-neutral-950 border border-neutral-900 rounded-xl p-5 flex gap-4 items-center">
@@ -21,6 +26,53 @@ export default function CredentialsStatus({ status, onRefresh }: CredentialsStat
   }
 
   const { twilioConfigured, twilioFrom, twilioWhatsAppFrom, authkeyConfigured, authkeySender, authkeyWhatsAppSender } = status;
+
+  const fetchTwilioBalance = async () => {
+    try {
+      setTwilioBalanceLoading(true);
+      const res = await fetch('/api/balance/twilio');
+      if (res.ok) {
+        const data = await res.json();
+        
+        try {
+          const rateRes = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+          if (rateRes.ok) {
+            const rateData = await rateRes.json();
+            data.inrRate = rateData.rates.INR;
+          }
+        } catch (e) {
+          data.inrRate = 83.5; // Fallback approximate value
+        }
+        
+        setTwilioBalance(data);
+      } else {
+        const error = await res.json();
+        alert(`Failed to fetch Twilio balance: ${error.error}`);
+      }
+    } catch (err) {
+      alert("Error checking Twilio balance");
+    } finally {
+      setTwilioBalanceLoading(false);
+    }
+  };
+
+  const fetchAuthkeyBalance = async () => {
+    try {
+      setAuthkeyBalanceLoading(true);
+      const res = await fetch('/api/balance/authkey');
+      if (res.ok) {
+        const data = await res.json();
+        setAuthkeyBalance(data);
+      } else {
+        const error = await res.json();
+        alert(`Failed to fetch Authkey balance: ${error.error}`);
+      }
+    } catch (err) {
+      alert("Error checking Authkey balance");
+    } finally {
+      setAuthkeyBalanceLoading(false);
+    }
+  };
 
   return (
     <div className="bg-[#0c0c0c] border border-neutral-900 rounded-xl shadow-md overflow-hidden">
@@ -71,6 +123,33 @@ export default function CredentialsStatus({ status, onRefresh }: CredentialsStat
               </p>
             )}
           </div>
+          {twilioConfigured && (
+            <div className="mt-4 pt-4 border-t border-emerald-500/10">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={fetchTwilioBalance}
+                  disabled={twilioBalanceLoading}
+                  className="bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                >
+                  {twilioBalanceLoading ? <RefreshCw className="h-3 w-3 animate-spin"/> : <Wallet className="h-3 w-3"/>}
+                  Check Live Balance
+                </button>
+                {twilioBalance && (
+                  <span className="text-sm font-mono font-medium text-emerald-400">
+                    {twilioBalance.currency === 'USD' && twilioBalance.inrRate ? (
+                      <>
+                        ₹ {(parseFloat(twilioBalance.balance) * twilioBalance.inrRate).toFixed(2)} <span className="text-[10px] text-neutral-500">(${parseFloat(twilioBalance.balance).toFixed(2)} USD)</span>
+                      </>
+                    ) : (
+                      <>
+                        {twilioBalance.balance} {twilioBalance.currency}
+                      </>
+                    )}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           {!twilioConfigured && (
             <div className="text-[10px] bg-neutral-950 border border-neutral-850 p-2 rounded-lg text-amber-400 leading-relaxed font-mono mt-2">
               Missing: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
@@ -111,6 +190,25 @@ export default function CredentialsStatus({ status, onRefresh }: CredentialsStat
               </p>
             )}
           </div>
+          {authkeyConfigured && (
+            <div className="mt-4 pt-4 border-t border-emerald-500/10">
+              <div className="flex items-center justify-between">
+                <button
+                  onClick={fetchAuthkeyBalance}
+                  disabled={authkeyBalanceLoading}
+                  className="bg-neutral-900 border border-neutral-800 hover:border-neutral-700 text-neutral-300 px-3 py-1.5 rounded text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-50"
+                >
+                  {authkeyBalanceLoading ? <RefreshCw className="h-3 w-3 animate-spin"/> : <Wallet className="h-3 w-3"/>}
+                  Check Live Balance
+                </button>
+                {authkeyBalance && (
+                  <span className="text-xs font-mono font-medium text-emerald-400 max-w-[200px] overflow-hidden text-right whitespace-nowrap text-ellipsis" title={JSON.stringify(authkeyBalance)}>
+                    {authkeyBalance.balance !== undefined ? `₹ ${authkeyBalance.balance}` : (authkeyBalance.message || authkeyBalance.status || 'Details loaded')}
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
           {!authkeyConfigured && (
             <div className="text-[10px] bg-neutral-950 border border-neutral-850 p-2 rounded-lg text-amber-400 leading-relaxed font-mono mt-2">
               Missing: AUTHKEY_API_KEY, AUTHKEY_SENDER_ID

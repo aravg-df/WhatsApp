@@ -1,12 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ContactGroup, BroadcastHistory, ScheduledBroadcast, MasterContact } from './types.js';
+import { ContactGroup, BroadcastHistory, ScheduledBroadcast, MasterContact, Client } from './types.js';
 import mongoose from 'mongoose';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 
 export interface DatabaseSchema {
+  clients: Client[];
   groups: ContactGroup[];
   history: BroadcastHistory[];
   schedules?: ScheduledBroadcast[];
@@ -14,10 +15,14 @@ export interface DatabaseSchema {
 }
 
 const DEFAULT_DB: DatabaseSchema = {
+  clients: [
+    { id: 'client-1', name: 'Dream Filer' }
+  ],
   groups: [
     {
       id: 'g-default',
-      name: 'Sample Group',
+      clientId: 'client-1',
+      name: 'test',
       description: 'A sample group to help you get started. Edit or delete this.',
       contacts: [
         { id: 'c-1', name: 'India Test User-Arav', phone: '9238936229', countryCode: '91' }
@@ -30,8 +35,15 @@ const DEFAULT_DB: DatabaseSchema = {
 };
 
 // --- Mongoose Models ---
+const ClientSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  name: { type: String, required: true },
+  description: { type: String }
+});
+
 const GroupSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
+  clientId: { type: String, required: true },
   name: { type: String, required: true },
   description: { type: String },
   contacts: { type: Array, default: [] }
@@ -76,9 +88,11 @@ const MasterContactSchema = new mongoose.Schema({
   name: { type: String, required: true },
   phone: { type: String, required: true },
   countryCode: { type: String },
-  groupId: { type: String }
+  groupAssignments: { type: mongoose.Schema.Types.Mixed, default: {} },
+  rawData: { type: mongoose.Schema.Types.Mixed }
 });
 
+const ClientModel = mongoose.models.Client || mongoose.model('Client', ClientSchema);
 const Group = mongoose.models.Group || mongoose.model('Group', GroupSchema);
 const History = mongoose.models.History || mongoose.model('History', HistorySchema);
 const Schedule = mongoose.models.Schedule || mongoose.model('Schedule', ScheduleSchema);
@@ -129,6 +143,7 @@ function ensureInitializedLocal(): DatabaseSchema {
     }
     const raw = fs.readFileSync(DB_FILE, 'utf-8');
     const db = JSON.parse(raw) as DatabaseSchema;
+    if (!db.clients) db.clients = [{ id: 'client-1', name: 'Dream Filer' }];
     if (!db.groups) db.groups = [];
     if (!db.history) db.history = [];
     if (!db.schedules) db.schedules = [];
@@ -154,6 +169,56 @@ export function saveDbLocal(data: DatabaseSchema): void {
 }
 
 // ---------------------------------------------
+// Client helpers
+// ---------------------------------------------
+export async function getClients(): Promise<Client[]> {
+  if (isMongoConnected) {
+    const docs = await ClientModel.find().lean();
+    if (docs.length === 0) {
+      const defaultClient = { id: 'client-1', name: 'Dream Filer' };
+      await ClientModel.create(defaultClient);
+      return [defaultClient] as unknown as Client[];
+    }
+    return docs as unknown as Client[];
+  }
+  const db = getDbLocal();
+  return db.clients;
+}
+
+export async function saveClient(client: Client): Promise<Client> {
+  if (isMongoConnected) {
+    await ClientModel.findOneAndUpdate({ id: client.id } as any, client, { upsert: true, new: true });
+    return client;
+  }
+  const db = getDbLocal();
+  const index = db.clients.findIndex(c => c.id === client.id);
+  if (index !== -1) db.clients[index] = client;
+  else db.clients.push(client);
+  saveDbLocal(db);
+  return client;
+}
+
+export async function deleteClient(id: string): Promise<boolean> {
+  if (isMongoConnected) {
+    const res = await ClientModel.deleteOne({ id } as any);
+    if (res.deletedCount > 0) {
+      await Group.deleteMany({ clientId: id } as any); // Delete all groups in this client
+    }
+    return res.deletedCount > 0;
+  }
+  const db = getDbLocal();
+  const originalLength = db.clients.length;
+  db.clients = db.clients.filter(c => c.id !== id);
+  if (db.clients.length !== originalLength) {
+    // Delete groups
+    db.groups = db.groups.filter(g => g.clientId !== id);
+    saveDbLocal(db);
+    return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------
 // Group helpers
 // ---------------------------------------------
 export async function getGroups(): Promise<ContactGroup[]> {
@@ -163,7 +228,7 @@ export async function getGroups(): Promise<ContactGroup[]> {
     const docs = await Group.find().lean();
     return docs.map(d => {
       const gId = String(d.id);
-      const groupContacts = masterContacts.filter(mc => mc.groupId === gId).map(mc => ({
+      const groupContacts = masterContacts.filter(mc => mc.groupAssignments && mc.groupAssignments[d.clientId || 'client-1'] === gId).map(mc => ({
         id: mc.id,
         name: mc.name,
         phone: mc.phone,
@@ -171,6 +236,7 @@ export async function getGroups(): Promise<ContactGroup[]> {
       }));
       return {
         id: gId,
+        clientId: d.clientId || 'client-1',
         name: d.name,
         description: d.description,
         contacts: groupContacts,
@@ -179,7 +245,7 @@ export async function getGroups(): Promise<ContactGroup[]> {
   }
   const db = getDbLocal();
   return db.groups.map(g => {
-    const groupContacts = masterContacts.filter(mc => mc.groupId === g.id).map(mc => ({
+    const groupContacts = masterContacts.filter(mc => mc.groupAssignments && mc.groupAssignments[g.clientId || 'client-1'] === g.id).map(mc => ({
         id: mc.id,
         name: mc.name,
         phone: mc.phone,
@@ -193,8 +259,9 @@ export async function getGroups(): Promise<ContactGroup[]> {
 }
 
 export async function saveGroup(group: ContactGroup): Promise<ContactGroup> {
-  // Sync back to MasterContacts: any contact inside group.contacts gets their groupId updated to this group.
+  // Sync back to MasterContacts: any contact inside group.contacts gets their groupAssignments mapping updated.
   const allMaster = await getMasterContacts();
+  const clientId = group.clientId || 'client-1';
   
   if (isMongoConnected) {
     await Group.findOneAndUpdate({ id: group.id } as any, group, { upsert: true, new: true });
@@ -202,19 +269,21 @@ export async function saveGroup(group: ContactGroup): Promise<ContactGroup> {
     for (const c of group.contacts) {
       const existing = allMaster.find(mc => mc.phone === c.phone);
       if (existing) {
-         if (existing.groupId !== group.id) {
-           await MasterContactModel.updateOne({ id: existing.id } as any, { $set: { groupId: group.id } });
+         if (!existing.groupAssignments || existing.groupAssignments[clientId] !== group.id) {
+           const updatePath = `groupAssignments.${clientId}`;
+           await MasterContactModel.updateOne({ id: existing.id } as any, { $set: { [updatePath]: group.id } });
          }
       } else {
-         const newMc = { id: c.id, name: c.name, phone: c.phone, countryCode: c.countryCode, groupId: group.id };
+         const newMc = { id: c.id, name: c.name, phone: c.phone, countryCode: c.countryCode, groupAssignments: { [clientId]: group.id } };
          await MasterContactModel.findOneAndUpdate({ id: c.id } as any, newMc, { upsert: true, new: true });
       }
     }
     // Remove group ID from contacts that were deleted from this group
-    const groupMasterContacts = allMaster.filter(mc => mc.groupId === group.id);
+    const groupMasterContacts = allMaster.filter(mc => mc.groupAssignments && mc.groupAssignments[clientId] === group.id);
     for (const mc of groupMasterContacts) {
       if (!group.contacts.find(c => c.phone === mc.phone)) {
-        await MasterContactModel.updateOne({ id: mc.id } as any, { $unset: { groupId: "" } });
+        const unsetPath = `groupAssignments.${clientId}`;
+        await MasterContactModel.updateOne({ id: mc.id } as any, { $unset: { [unsetPath]: "" } });
       }
     }
     return group;
@@ -229,17 +298,18 @@ export async function saveGroup(group: ContactGroup): Promise<ContactGroup> {
   for (const c of group.contacts) {
       const existing = db.masterContacts.find(mc => mc.phone === c.phone);
       if (existing) {
-         existing.groupId = group.id;
+         if (!existing.groupAssignments) existing.groupAssignments = {};
+         existing.groupAssignments[clientId] = group.id;
       } else {
          db.masterContacts.push({
-             id: c.id, name: c.name, phone: c.phone, countryCode: c.countryCode, groupId: group.id
+             id: c.id, name: c.name, phone: c.phone, countryCode: c.countryCode, groupAssignments: { [clientId]: group.id }
          });
       }
   }
-  const groupMasterContacts = db.masterContacts.filter(mc => mc.groupId === group.id);
+  const groupMasterContacts = db.masterContacts.filter(mc => mc.groupAssignments && mc.groupAssignments[clientId] === group.id);
   for (const mc of groupMasterContacts) {
     if (!group.contacts.find(c => c.phone === mc.phone)) {
-      delete mc.groupId;
+      if (mc.groupAssignments) delete mc.groupAssignments[clientId];
     }
   }
 
@@ -248,10 +318,16 @@ export async function saveGroup(group: ContactGroup): Promise<ContactGroup> {
 }
 
 export async function deleteGroup(id: string): Promise<boolean> {
+  const allGroups = await getGroups();
+  const group = allGroups.find(g => g.id === id);
   if (isMongoConnected) {
     const res = await Group.deleteOne({ id } as any);
-    if (res.deletedCount > 0) {
-      await MasterContactModel.updateMany({ groupId: id } as any, { $unset: { groupId: "" } });
+    if (res.deletedCount > 0 && group) {
+      const unsetPath = `groupAssignments.${group.clientId}`;
+      await MasterContactModel.updateMany(
+         { [unsetPath]: id } as any,
+         { $unset: { [unsetPath]: "" } }
+      );
       return true;
     }
     return false;
@@ -259,10 +335,12 @@ export async function deleteGroup(id: string): Promise<boolean> {
   const db = getDbLocal();
   const originalLength = db.groups.length;
   db.groups = db.groups.filter(g => g.id !== id);
-  if (db.groups.length !== originalLength) {
+  if (db.groups.length !== originalLength && group) {
     if (db.masterContacts) {
        for (const mc of db.masterContacts) {
-          if (mc.groupId === id) delete mc.groupId;
+          if (mc.groupAssignments && mc.groupAssignments[group.clientId] === id) {
+             delete mc.groupAssignments[group.clientId];
+          }
        }
     }
     saveDbLocal(db);
@@ -376,12 +454,13 @@ export async function saveMasterContact(contact: any): Promise<any> {
   return contact;
 }
 
-export async function updateMasterContactGroupId(id: string, groupId: string | null): Promise<void> {
+export async function updateMasterContactGroupId(id: string, clientId: string, groupId: string | null): Promise<void> {
   if (isMongoConnected) {
+    const updatePath = `groupAssignments.${clientId}`;
     if (groupId === null) {
-      await MasterContactModel.updateOne({ id } as any, { $unset: { groupId: "" } });
+      await MasterContactModel.updateOne({ id } as any, { $unset: { [updatePath]: "" } });
     } else {
-      await MasterContactModel.updateOne({ id } as any, { $set: { groupId } });
+      await MasterContactModel.updateOne({ id } as any, { $set: { [updatePath]: groupId } });
     }
     return;
   }
@@ -389,10 +468,11 @@ export async function updateMasterContactGroupId(id: string, groupId: string | n
   if (!db.masterContacts) db.masterContacts = [];
   const contact = db.masterContacts.find(c => c.id === id);
   if (contact) {
+    if (!contact.groupAssignments) contact.groupAssignments = {};
     if (groupId === null) {
-      delete contact.groupId;
+      delete contact.groupAssignments[clientId];
     } else {
-      contact.groupId = groupId;
+      contact.groupAssignments[clientId] = groupId;
     }
     saveDbLocal(db);
   }
