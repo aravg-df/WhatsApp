@@ -23,6 +23,8 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
   const [singlePhone, setSinglePhone] = useState('');
   const [singleCode, setSingleCode] = useState('91'); // Default coding: India
 
+  const [confirmDeleteGroup, setConfirmDeleteGroup] = useState<string | null>(null);
+
   // Bulk Import state
   const [bulkText, setBulkText] = useState('');
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
@@ -63,11 +65,23 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
 
   const handleAddSingleContact = () => {
     if (!singlePhone.trim()) return;
+    const phoneStr = cleanDigits(singlePhone);
+    const codeStr = cleanDigits(singleCode) || '91';
+    
+    // Check global duplicate
+    const existsGlobally = groups.some(g => g.contacts.some(c => c.phone === phoneStr));
+    const existsLocally = activeGroup?.contacts.some(c => c.phone === phoneStr);
+    
+    if (existsGlobally || existsLocally) {
+      alert(`Contact with phone ${phoneStr} already exists in a group. Cannot add duplicates.`);
+      return;
+    }
+
     const newContact: Contact = {
       id: 'c-' + Math.random().toString(36).substring(2, 9),
       name: singleName.trim() || 'Customer',
-      phone: cleanDigits(singlePhone),
-      countryCode: cleanDigits(singleCode) || '91'
+      phone: phoneStr,
+      countryCode: codeStr
     };
 
     if (activeGroup) {
@@ -190,11 +204,29 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
           }
         }
 
-        if (parsedContacts.length > 0) {
+        // Filter out duplicates globally and locally
+        const existingPhones = new Set(groups.flatMap(g => g.contacts.map(c => c.phone)));
+        if (activeGroup) {
+          activeGroup.contacts.forEach(c => existingPhones.add(c.phone));
+        }
+
+        const uniqueContacts: Contact[] = [];
+        let duplicatesSkipped = 0;
+
+        for (const c of parsedContacts) {
+          if (!existingPhones.has(c.phone)) {
+            uniqueContacts.push(c);
+            existingPhones.add(c.phone); // Prevent duplicates within the import itself
+          } else {
+            duplicatesSkipped++;
+          }
+        }
+
+        if (uniqueContacts.length > 0) {
           if (activeGroup) {
             const updated = {
               ...activeGroup,
-              contacts: [...activeGroup.contacts, ...parsedContacts]
+              contacts: [...activeGroup.contacts, ...uniqueContacts]
             };
             setActiveGroup(updated);
           } else {
@@ -202,11 +234,13 @@ export default function GroupsTab({ groups, onSaveGroup, onDeleteGroup }: Groups
               id: '',
               name: groupName || 'Imported Workspace',
               description: groupDesc,
-              contacts: parsedContacts
+              contacts: uniqueContacts
             });
           }
-          setImportFeedback(`Successfully parsed and imported ${parsedContacts.length} contacts!`);
+          setImportFeedback(`Successfully imported ${uniqueContacts.length} contacts! ${duplicatesSkipped > 0 ? `(Skipped ${duplicatesSkipped} duplicates)` : ''}`);
           setBulkText('');
+        } else if (duplicatesSkipped > 0) {
+          setImportFeedback(`Skipped all ${duplicatesSkipped} contacts because they already exist in your groups.`);
         } else {
           setImportFeedback('Could not detect any valid phone numbers or JSON fields. Review the pasting format.');
         }
@@ -519,13 +553,31 @@ Option C (Simple list):
                     >
                       <Edit2 className="h-3 w-3" /> Edit / Add Numbers
                     </button>
-                    <button
-                      onClick={() => onDeleteGroup(group.id)}
-                      className="text-rose-400 hover:text-rose-300 font-semibold flex items-center gap-1.5 transition-colors px-2 py-1.5 hover:bg-rose-950/25 rounded animate-ease"
-                      title="Delete Segment"
-                    >
-                      <Trash2 className="h-3 w-3" /> Delete
-                    </button>
+                    {confirmDeleteGroup === group.id ? (
+                      <div className="flex items-center gap-2">
+                        <span className="text-rose-400 font-medium">Are you sure?</span>
+                        <button
+                          onClick={() => onDeleteGroup(group.id)}
+                          className="bg-rose-500 text-white px-2 py-1 rounded"
+                        >
+                          Yes
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteGroup(null)}
+                          className="bg-neutral-800 text-white px-2 py-1 rounded"
+                        >
+                          No
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmDeleteGroup(group.id)}
+                        className="text-rose-400 hover:text-rose-300 font-semibold flex items-center gap-1.5 transition-colors px-2 py-1.5 hover:bg-rose-950/25 rounded animate-ease"
+                        title="Delete Segment"
+                      >
+                        <Trash2 className="h-3 w-3" /> Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               ))

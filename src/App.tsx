@@ -8,11 +8,12 @@ import BroadcastTab from './components/BroadcastTab.js';
 import GroupsTab from './components/GroupsTab.js';
 import HistoryTab from './components/HistoryTab.js';
 import CredentialsStatus from './components/CredentialsStatus.js';
-import WhatsAppWebTab from './components/WhatsAppWebTab.js';
+
+import MasterDataTab from './components/MasterDataTab.js';
 
 export default function App() {
   // Navigation tabs state
-  const [activeTab, setActiveTab] = useState<'broadcast' | 'groups' | 'history' | 'status' | 'whatsapp-web'>('broadcast');
+  const [activeTab, setActiveTab] = useState<'broadcast' | 'groups' | 'master' | 'history' | 'status'>('broadcast');
 
   // Application-wide databases
   const [groups, setGroups] = useState<ContactGroup[]>([]);
@@ -101,9 +102,6 @@ export default function App() {
   };
 
   const handleDeleteGroup = async (groupId: string) => {
-    if (!window.confirm('Delete this contact group permanently? All containing numbers will be removed.')) {
-      return;
-    }
     try {
       const res = await fetch(`/api/groups/${groupId}`, {
         method: 'DELETE'
@@ -249,6 +247,17 @@ export default function App() {
               </button>
 
               <button
+                onClick={() => setActiveTab('master')}
+                className={`py-3.5 px-5 font-medium text-xs uppercase tracking-wider border-b-2 transition flex items-center gap-2 cursor-pointer ${
+                  activeTab === 'master'
+                    ? 'border-amber-500 text-neutral-100 font-semibold bg-neutral-900/30'
+                    : 'border-transparent text-neutral-500 hover:text-neutral-300'
+                }`}
+              >
+                <ShieldCheck className="h-4 w-4" /> Master Data
+              </button>
+
+              <button
                 onClick={() => setActiveTab('history')}
                 className={`py-3.5 px-5 font-medium text-xs uppercase tracking-wider border-b-2 transition flex items-center gap-2 cursor-pointer ${
                   activeTab === 'history'
@@ -257,21 +266,6 @@ export default function App() {
                 }`}
               >
                 <History className="h-4 w-4" /> Dispatch History ({historyList.length})
-              </button>
-
-              <button
-                onClick={() => setActiveTab('whatsapp-web')}
-                className={`py-3.5 px-5 font-medium text-xs uppercase tracking-wider border-b-2 transition flex items-center gap-2 cursor-pointer ${
-                  activeTab === 'whatsapp-web'
-                    ? 'border-emerald-500 text-emerald-400 font-semibold bg-neutral-900/30'
-                    : 'border-transparent text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                <MessageSquare className="h-4 w-4" /> WhatsApp Web Dashboard
               </button>
 
               <button
@@ -304,6 +298,13 @@ export default function App() {
                 />
               )}
 
+              {activeTab === 'master' && (
+                <MasterDataTab
+                  groups={groups}
+                  fetchGroups={fetchGroups}
+                />
+              )}
+
               {activeTab === 'history' && (
                 <HistoryTab
                   historyList={historyList}
@@ -311,10 +312,6 @@ export default function App() {
                   onTriggerRetry={handleTriggerRetry}
                   onRefresh={fetchHistory}
                 />
-              )}
-
-              {activeTab === 'whatsapp-web' && (
-                <WhatsAppWebTab />
               )}
 
               {activeTab === 'status' && (

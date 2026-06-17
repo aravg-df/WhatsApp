@@ -341,10 +341,9 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
   }, []);
 
   // Cancel Scheduled Blast handler
+  const [confirmCancelScheduleId, setConfirmCancelScheduleId] = useState<string | null>(null);
+
   const handleCancelSchedule = async (id: string) => {
-    if (!window.confirm('Are you sure you want to cancel this scheduled campaign blast?')) {
-      return;
-    }
     setErrorMessage(null);
     setSuccessMessage(null);
     try {
@@ -360,6 +359,8 @@ export default function BroadcastTab({ groups, systemStatus, onBroadcastTriggere
       }
     } catch (e: any) {
       setErrorMessage(e.message || 'Error occurred while contacting backend scheduler.');
+    } finally {
+      setConfirmCancelScheduleId(null);
     }
   };
 
@@ -1469,13 +1470,33 @@ e.g.,
                       Gateway: <span className="font-semibold text-neutral-300 uppercase">{sched.gateway}</span> ({sched.channel})
                     </span>
                     {sched.status === 'pending' && (
-                      <button
-                        type="button"
-                        onClick={() => handleCancelSchedule(sched.id)}
-                        className="text-rose-400 hover:text-rose-350 transition flex items-center gap-1 cursor-pointer font-semibold"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" /> Cancel Schedule
-                      </button>
+                      confirmCancelScheduleId === sched.id ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-rose-400 font-medium">Clear?</span>
+                          <button
+                            type="button"
+                            onClick={() => handleCancelSchedule(sched.id)}
+                            className="bg-rose-500 text-white rounded px-2 hover:bg-rose-400"
+                          >
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmCancelScheduleId(null)}
+                            className="bg-neutral-700 text-white rounded px-2 hover:bg-neutral-600"
+                          >
+                            No
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmCancelScheduleId(sched.id)}
+                          className="text-rose-400 hover:text-rose-350 transition flex items-center gap-1 cursor-pointer font-semibold"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Cancel Schedule
+                        </button>
+                      )
                     )}
                   </div>
                 </div>

@@ -5,6 +5,14 @@ export interface Contact {
   countryCode: string; // e.g., "91", "1", etc.
 }
 
+export interface MasterContact {
+  id: string;
+  name: string; // clean name without prefixes
+  phone: string;
+  countryCode: string;
+  groupId?: string; // only goes to one group
+}
+
 export interface ContactGroup {
   id: string;
   name: string;

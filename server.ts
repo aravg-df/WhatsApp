@@ -12,13 +12,19 @@ import {
   getSchedules,
   saveSchedule,
   deleteSchedule,
+  connectMongo,
+  getMasterContacts,
+  saveMasterContact,
+  updateMasterContactGroupId,
+  deleteMasterContact
 } from './src/dbStore.js';
-import { Contact, ContactGroup, BroadcastHistory, BroadcastRecipient, ScheduledBroadcast } from './src/types.js';
+import { Contact, ContactGroup, BroadcastHistory, BroadcastRecipient, ScheduledBroadcast, MasterContact } from './src/types.js';
 
 // Load environment variables
 dotenv.config();
 
 async function startServer() {
+  await connectMongo();
   const app = express();
   const PORT = 3000;
 
@@ -29,7 +35,7 @@ async function startServer() {
   // --- API Routes ---
 
   // Check env configuration status
-  app.get('/api/status', (req, res) => {
+  app.get('/api/status', async (req, res) => {
     const twilioConfigured = !!(
       process.env.TWILIO_ACCOUNT_SID &&
       process.env.TWILIO_AUTH_TOKEN &&
@@ -209,16 +215,73 @@ async function startServer() {
     });
   });
 
-  // Groups and Contacts Management Endpoints
-  app.get('/api/groups', (req, res) => {
+  // Master Contacts Endpoints
+  app.get('/api/master-contacts', async (req, res) => {
     try {
-      res.json(getGroups());
+      res.json(await getMasterContacts());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/groups', (req, res) => {
+  app.post('/api/master-contacts/bulk', async (req, res) => {
+    try {
+      const contacts: MasterContact[] = req.body.contacts;
+      if (!Array.isArray(contacts)) {
+        return res.status(400).json({ error: 'Expected an array of contacts' });
+      }
+      for (const c of contacts) {
+        if (!c.id) {
+          c.id = 'mc-' + Math.random().toString(36).substring(2, 9);
+        }
+        await saveMasterContact(c);
+      }
+      res.json({ success: true, message: `Saved ${contacts.length} master contacts.` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/master-contacts/bulk-group', async (req, res) => {
+    try {
+      const { contactIds, groupId } = req.body;
+      if (!Array.isArray(contactIds)) {
+        return res.status(400).json({ error: 'Expected an array of contactIds' });
+      }
+      for (const id of contactIds) {
+        await updateMasterContactGroupId(id, groupId || null);
+      }
+      res.json({ success: true, message: `Updated group for ${contactIds.length} contacts.` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/master-contacts/bulk-delete', async (req, res) => {
+    try {
+      const { contactIds } = req.body;
+      if (!Array.isArray(contactIds)) {
+        return res.status(400).json({ error: 'Expected an array of contactIds' });
+      }
+      for (const id of contactIds) {
+        await deleteMasterContact(id);
+      }
+      res.json({ success: true, message: `Deleted ${contactIds.length} contacts.` });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Groups and Contacts Management Endpoints
+  app.get('/api/groups', async (req, res) => {
+    try {
+      res.json(await getGroups());
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/groups', async (req, res) => {
     try {
       const group: ContactGroup = req.body;
       if (!group.name) {
@@ -230,14 +293,14 @@ async function startServer() {
       if (!group.contacts) {
         group.contacts = [];
       }
-      saveGroup(group);
+      await saveGroup(group);
       res.status(201).json(group);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.put('/api/groups/:id', (req, res) => {
+  app.put('/api/groups/:id', async (req, res) => {
     try {
       const { id } = req.params;
       const group: ContactGroup = req.body;
@@ -245,17 +308,17 @@ async function startServer() {
       if (!group.name) {
         return res.status(400).json({ error: 'Group name is required' });
       }
-      saveGroup(group);
+      await saveGroup(group);
       res.json(group);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.delete('/api/groups/:id', (req, res) => {
+  app.delete('/api/groups/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const deleted = deleteGroup(id);
+      const deleted = await deleteGroup(id);
       if (deleted) {
         res.json({ success: true, message: 'Group deleted successfully' });
       } else {
@@ -267,17 +330,17 @@ async function startServer() {
   });
 
   // History Endpoints
-  app.get('/api/history', (req, res) => {
+  app.get('/api/history', async (req, res) => {
     try {
-      res.json(getHistory());
+      res.json(await getHistory());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/history/clear', (req, res) => {
+  app.post('/api/history/clear', async (req, res) => {
     try {
-      clearHistory();
+      await clearHistory();
       res.json({ success: true, message: 'Broadcast history cleared successfully' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -501,13 +564,13 @@ async function startServer() {
     twilioWhatsAppFrom = '',
     authkeyWhatsAppSender = ''
   ) {
-    const historyList = getHistory();
+    const historyList = await getHistory();
     const itemIndex = historyList.findIndex(h => h.id === historyId);
     if (itemIndex === -1) return;
 
     const historyItem = historyList[itemIndex];
     historyItem.status = 'in_progress';
-    saveHistory(historyItem);
+    await saveHistory(historyItem);
 
     if (gateway === 'authkey' && channel === 'whatsapp' && recipientsToProcess.length > 0) {
       const res = await sendAuthkeyWhatsAppBulk(recipientsToProcess, templateId, message, authkeyWhatsAppSender);
@@ -539,7 +602,7 @@ async function startServer() {
       historyItem.successCount = succ;
       historyItem.failedCount = fail;
       historyItem.status = 'completed';
-      saveHistory(historyItem);
+      await saveHistory(historyItem);
       return;
     }
 
@@ -686,14 +749,14 @@ async function startServer() {
       historyItem.failedCount = failedCount;
       
       // Save progress
-      saveHistory(historyItem);
+      await saveHistory(historyItem);
 
       // Brief delay to mitigate rate limiting blocks (e.g. 150ms per SMS)
       await new Promise(resolve => setTimeout(resolve, 150));
     }
 
     historyItem.status = 'completed';
-    saveHistory(historyItem);
+    await saveHistory(historyItem);
   }
 
   // Simulator configurations
@@ -710,9 +773,9 @@ async function startServer() {
     "Is there an alternative link for payments?"
   ];
 
-  function updateRecipientDeliveryState(historyId: string, phone: string, nextStatus: 'sent' | 'delivered' | 'read' | 'replied', replyText?: string) {
+  async function updateRecipientDeliveryState(historyId: string, phone: string, nextStatus: 'sent' | 'delivered' | 'read' | 'replied', replyText?: string) {
     try {
-      const historyList = getHistory();
+      const historyList = await getHistory();
       const itemIndex = historyList.findIndex(h => h.id === historyId);
       if (itemIndex === -1) return;
       const historyItem = historyList[itemIndex];
@@ -723,7 +786,7 @@ async function startServer() {
           historyItem.recipients[recIndex].replyText = replyText;
           historyItem.recipients[recIndex].replyTime = new Date().toISOString();
         }
-        saveHistory(historyItem);
+        await saveHistory(historyItem);
       }
     } catch (e) {
       console.error('Error simulating reply status update:', e);
@@ -731,7 +794,7 @@ async function startServer() {
   }
 
   // Trigger Bulk Broadcast API
-  app.post('/api/broadcast', (req, res) => {
+  app.post('/api/broadcast', async (req, res) => {
     try {
       const { groupId, customContacts, gateway, message, channel, templateId, twilioWhatsAppFrom, authkeyWhatsAppSender } = req.body;
 
@@ -747,7 +810,7 @@ async function startServer() {
       let targetGroupName = 'Ad-hoc Group';
 
       if (groupId && groupId !== 'adhoc') {
-        const groups = getGroups();
+        const groups = await getGroups();
         const foundGroup = groups.find(g => g.id === groupId);
         if (!foundGroup) {
           return res.status(404).json({ error: 'Select contact group not found' });
@@ -780,7 +843,7 @@ async function startServer() {
       };
 
       // Save initial record
-      saveHistory(newHistoryItem);
+      await saveHistory(newHistoryItem);
 
       // Fire and forget background worker
       runBroadcastBackground(
@@ -805,10 +868,10 @@ async function startServer() {
   });
 
   // Retry Failed Contacts of specific Broadcast run
-  app.post('/api/history/:id/retry', (req, res) => {
+  app.post('/api/history/:id/retry', async (req, res) => {
     try {
       const { id } = req.params;
-      const historyList = getHistory();
+      const historyList = await getHistory();
       const currentRun = historyList.find(h => h.id === id);
 
       if (!currentRun) {
@@ -849,7 +912,7 @@ async function startServer() {
       // Reset only failed count to preserve previous success states if desired, but
       // cleaner is to subtract the failures we are retrying from failedCount
       currentRun.failedCount = currentRun.failedCount - failedRecipients.length;
-      saveHistory(currentRun);
+      await saveHistory(currentRun);
 
       // Fire and forget retry worker with original channel & templates saved in currentRun info
       runBroadcastBackground(
@@ -880,20 +943,20 @@ async function startServer() {
     
     // IST is UTC+5:30. Subtract 5h 30m offset to yield matching UTC Date object
     const targetUTC = Date.UTC(year, month - 1, day, hour, minute, 0);
-    const offsetMs = (5 * 60 + 30) * 60 * 1050; // 5.5 hours in ms
+    const offsetMs = (5 * 60 + 30) * 60 * 1000; // 5.5 hours in ms
     return new Date(targetUTC - offsetMs);
   }
 
   // --- Schedules Endpoints ---
-  app.get('/api/schedules', (req, res) => {
+  app.get('/api/schedules', async (req, res) => {
     try {
-      res.json(getSchedules());
+      res.json(await getSchedules());
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  app.post('/api/schedules', (req, res) => {
+  app.post('/api/schedules', async (req, res) => {
     try {
       const { groupId, customContacts, gateway, message, channel, templateId, twilioWhatsAppFrom, authkeyWhatsAppSender, scheduleTimeIST } = req.body;
 
@@ -909,7 +972,7 @@ async function startServer() {
       let count = 0;
 
       if (groupId && groupId !== 'adhoc') {
-        const groups = getGroups();
+        const groups = await getGroups();
         const foundGroup = groups.find(g => g.id === groupId);
         if (!foundGroup) {
           return res.status(404).json({ error: 'Select contact group not found' });
@@ -935,7 +998,7 @@ async function startServer() {
         createdAt: new Date().toISOString()
       };
 
-      saveSchedule(newSchedule);
+      await saveSchedule(newSchedule);
       res.status(202).json({
         success: true,
         message: 'Campaign scheduled successfully.',
@@ -946,10 +1009,10 @@ async function startServer() {
     }
   });
 
-  app.delete('/api/schedules/:id', (req, res) => {
+  app.delete('/api/schedules/:id', async (req, res) => {
     try {
       const { id } = req.params;
-      const deleted = deleteSchedule(id);
+      const deleted = await deleteSchedule(id);
       if (deleted) {
         res.json({ success: true, message: 'Scheduled campaign cancelled successfully.' });
       } else {
@@ -963,7 +1026,7 @@ async function startServer() {
   // Background loop checking for pending scheduler elements (every 10 seconds)
   setInterval(async () => {
     try {
-      const schedules = getSchedules();
+      const schedules = await getSchedules();
       const pendingSchedules = schedules.filter(s => s.status === 'pending');
       if (pendingSchedules.length === 0) return;
 
@@ -973,13 +1036,13 @@ async function startServer() {
         const targetDate = parseISTToDate(sched.scheduleTimeIST);
         if (now >= targetDate) {
           sched.status = 'executed';
-          saveSchedule(sched);
+          await saveSchedule(sched);
 
           console.log(`[SCHEDULER ENGINE] Executing automated scheduled campaign ${sched.id} for group ${sched.groupName}`);
 
           let contactsList: Contact[] = [];
           if (sched.groupId && sched.groupId !== 'adhoc') {
-            const groups = getGroups();
+            const groups = await getGroups();
             const foundGroup = groups.find(g => g.id === sched.groupId);
             if (foundGroup) {
               contactsList = foundGroup.contacts || [];
@@ -991,7 +1054,7 @@ async function startServer() {
           if (contactsList.length === 0) {
             console.log(`[SCHEDULER ENGINE] Aborted schedule ${sched.id} - contact group was empty.`);
             sched.status = 'failed';
-            saveSchedule(sched);
+            await saveSchedule(sched);
             continue;
           }
 
@@ -1012,7 +1075,7 @@ async function startServer() {
             templateId: sched.templateId || '',
           };
 
-          saveHistory(newHistoryItem);
+          await saveHistory(newHistoryItem);
 
           runBroadcastBackground(
             historyId,
@@ -1041,7 +1104,7 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', async (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

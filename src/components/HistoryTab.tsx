@@ -24,6 +24,8 @@ export default function HistoryTab({ historyList, onClearHistory, onTriggerRetry
   // Sibling states
   const [isRetryingMap, setIsRetryingMap] = useState<Record<string, boolean>>({});
 
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+
   const toggleExpand = (id: string) => {
     if (expandedId === id) {
       setExpandedId(null);
@@ -35,9 +37,8 @@ export default function HistoryTab({ historyList, onClearHistory, onTriggerRetry
   };
 
   const handleClear = async () => {
-    if (window.confirm('Are you sure you want to clear all historical messaging records permanently?')) {
-      await onClearHistory();
-    }
+    await onClearHistory();
+    setShowClearConfirm(false);
   };
 
   const handleRetryFailed = async (e: React.MouseEvent, hId: string) => {
@@ -84,12 +85,30 @@ export default function HistoryTab({ historyList, onClearHistory, onTriggerRetry
             Refresh Log
           </button>
           {historyList.length > 0 && (
-            <button
-              onClick={handleClear}
-              className="flex-1 sm:flex-initial text-xs bg-rose-955/20 hover:bg-rose-950/45 text-rose-300 border border-rose-909/40 rounded-lg px-4 py-2 font-semibold transition cursor-pointer"
-            >
-              Clear Records
-            </button>
+            showClearConfirm ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-rose-400 font-medium">Clear all?</span>
+                <button
+                  onClick={handleClear}
+                  className="bg-rose-500 hover:bg-rose-400 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                >
+                  Yes
+                </button>
+                <button
+                  onClick={() => setShowClearConfirm(false)}
+                  className="bg-neutral-800 hover:bg-neutral-700 text-white px-3 py-2 rounded-lg text-xs font-bold"
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowClearConfirm(true)}
+                className="flex-1 sm:flex-initial text-xs bg-rose-955/20 hover:bg-rose-950/45 text-rose-300 border border-rose-909/40 rounded-lg px-4 py-2 font-semibold transition cursor-pointer"
+              >
+                Clear Records
+              </button>
+            )
           )}
         </div>
       </div>
